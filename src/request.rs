@@ -20,23 +20,17 @@ pub enum Request {
 impl Request {
     pub fn parse(data: &[u8]) -> Option<Self> {
         if data.len() < 4 {
-            warn!("Request buffer too short: {} bytes", data.len());
+            warn!(len = data.len(), "Request buffer too short");
             return None;
         }
 
-        let _cmd_id_le = LittleEndian::read_i32(data);
-        let _cmd_id_be = BigEndian::read_i32(data);
-
-        // Check if this is a native command (cmdId <= 100)
-        // Native commands use little-endian format and the high bytes are 0
-        let _cmd_id_le = LittleEndian::read_i32(data);
-        let _cmd_id_be = BigEndian::read_i32(data);
-
         // If the first byte is a small number and high bytes are 0, it's likely a native command
         if data[1] == 0 && data[2] == 0 && data[3] == 0 && data[0] <= 100 {
-            debug!("Detected native command: {}", data[0]);
+            let cmd_id = data[0];
+            let cmd = NativeCommand::from(cmd_id);
+            debug!(cmd_id, cmd = ?cmd, "Detected native command:");
             return Some(Request::Native(NativeRequest {
-                cmd_id: data[0],
+                cmd_id,
                 data: data[4..].to_vec(),
             }));
         }
@@ -49,8 +43,9 @@ impl Request {
     fn parse_standard_request(buffer: &[u8]) -> Option<StandardRequest> {
         if buffer.len() < 12 {
             warn!(
-                "Standard request buffer too short: {} bytes (need at least 12)",
-                buffer.len()
+                len = buffer.len(),
+                min = 12,
+                "Standard request buffer too short:"
             );
             return None;
         }
@@ -58,13 +53,15 @@ impl Request {
         let method_code = BigEndian::read_i32(&buffer[0..4]);
         let buffer_size = BigEndian::read_i32(&buffer[4..8]);
         let param_count = BigEndian::read_i32(&buffer[8..12]);
+        let method_type = MethodType::from(method_code);
 
         debug!(
-            "Parsing standard request: method={}, buffer_size={}, param_count={}",
-            method_code, buffer_size, param_count
+            method = ?method_type,
+            code = method_code,
+            buffer_size,
+            param_count,
+            "Parsing standard request:"
         );
-
-        let method_type = MethodType::from(method_code);
 
         let mut params = HashMap::new();
         let mut offset = 12;
@@ -72,23 +69,25 @@ impl Request {
         for i in 0..param_count {
             if offset + 8 > buffer.len() {
                 warn!(
-                    "Buffer too short for param {} header at offset {}",
-                    i, offset
+                    param_index = i,
+                    offset,
+                    buffer_len = buffer.len(),
+                    "Buffer too short for param header:"
                 );
                 break;
             }
 
-            let param_type = BigEndian::read_i32(&buffer[offset..offset + 4]);
+            let param_type_code = BigEndian::read_i32(&buffer[offset..offset + 4]);
             let param_len = BigEndian::read_i32(&buffer[offset + 4..offset + 8]) as usize;
             offset += 8;
 
             if offset + param_len > buffer.len() {
                 warn!(
-                    "Buffer too short for param {} data: need {} bytes at offset {}, have {}",
-                    i,
+                    param_index = i,
                     param_len,
                     offset,
-                    buffer.len()
+                    buffer_len = buffer.len(),
+                    "Buffer too short for param data:"
                 );
                 break;
             }
@@ -96,16 +95,18 @@ impl Request {
             let param_data = buffer[offset..offset + param_len].to_vec();
             offset += param_len;
 
+            let param_type = MethodParamType::from(param_type_code);
+            let value_preview = format_param_value(&param_type, &param_data);
+
             debug!(
-                "  Param {}: type={} ({:?}), len={}, data={:02x?}",
-                i,
-                param_type,
-                MethodParamType::from(param_type),
-                param_len,
-                &param_data[..std::cmp::min(32, param_data.len())]
+                param_index = i,
+                param_type = ?param_type,
+                len = param_len,
+                value = %value_preview,
+                "  Param:"
             );
 
-            params.insert(param_type, param_data);
+            params.insert(param_type_code, param_data);
         }
 
         Some(StandardRequest {
@@ -115,6 +116,108 @@ impl Request {
             param_count,
             params,
         })
+    }
+}
+
+/// Format a parameter value for logging based on its type
+fn format_param_value(param_type: &MethodParamType, data: &[u8]) -> String {
+    match param_type {
+        // Integer parameters - show as decimal
+        MethodParamType::PmsTypeT
+        | MethodParamType::PmsPwdTypeT
+        | MethodParamType::PmsVerifyTypeT
+        | MethodParamType::PmsPwdRetryCountLeftT
+        | MethodParamType::PmsPwdLockTimeLeftT
+        | MethodParamType::PmsSecureQuestionRetryCountLeftT
+        | MethodParamType::PmsSecureQuestionLockTimeLeftT
+        | MethodParamType::PmsLatestSecureRulesT
+        | MethodParamType::PmsPwdUseridT
+        | MethodParamType::PmsOldPwdTypeT
+        | MethodParamType::PmsOldPwdLengthT
+        | MethodParamType::PmsCurrentPwdTypeT
+        | MethodParamType::PmsCurrentPwdLenT
+        | MethodParamType::PmsVerifyOldPwdResultT
+        | MethodParamType::PmsOldPwdTryRemainingCount
+        | MethodParamType::PmsOldPwdTryRemainingTime
+        | MethodParamType::PmsResultValidity => {
+            if data.len() >= 4 {
+                format!("{}", BigEndian::read_i32(data))
+            } else {
+                format!("<invalid: {} bytes>", data.len())
+            }
+        }
+
+        // Boolean-like parameters
+        MethodParamType::PmsHideEmailT => {
+            if data.len() >= 4 {
+                let val = BigEndian::read_i32(data);
+                if val == 0 {
+                    "false".to_string()
+                } else {
+                    "true".to_string()
+                }
+            } else {
+                format!("<invalid: {} bytes>", data.len())
+            }
+        }
+
+        // String parameters
+        MethodParamType::PmsAccountName => String::from_utf8_lossy(data).to_string(),
+
+        // Binary/hash parameters - show as hex with truncation
+        MethodParamType::PmsVerifyBufferT
+        | MethodParamType::PmsPwdInfoT
+        | MethodParamType::PmsSecureInfoBufferT
+        | MethodParamType::PmsChallengeT
+        | MethodParamType::PmsHandlerT
+        | MethodParamType::PmsEncBufferT
+        | MethodParamType::PmsOldPwdBufferT
+        | MethodParamType::PmsCurrentPwdBufferT
+        | MethodParamType::PmsCurrentPasswordBuffer => {
+            if data.len() <= 16 {
+                format!(
+                    "[{}]",
+                    data.iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            } else {
+                format!(
+                    "[{} ... +{} more]",
+                    data[..8]
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    data.len() - 8
+                )
+            }
+        }
+
+        // Default: show length and first few bytes
+        _ => {
+            if data.len() <= 8 {
+                format!(
+                    "{} bytes: [{}]",
+                    data.len(),
+                    data.iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            } else {
+                format!(
+                    "{} bytes: [{} ...]",
+                    data.len(),
+                    data[..4]
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            }
+        }
     }
 }
 
@@ -131,8 +234,9 @@ pub struct StandardRequest {
 impl StandardRequest {
     pub fn handle(&self, storage: &mut Storage) -> Vec<u8> {
         info!(
-            "Handling standard command: {:?} (code={})",
-            self.method_type, self.method_code
+            command = ?self.method_type,
+            code = self.method_code,
+            "Handling command:"
         );
         match self.method_type {
             MethodType::CeCmdPmsEnroll => self.handle_pms_enroll(storage),
@@ -155,38 +259,22 @@ impl StandardRequest {
             MethodType::TaCmdPasswordVerifyResult => self.handle_password_verify_result(storage),
             _ => {
                 warn!(
-                    "Unknown standard command: {:?} (code={})",
-                    self.method_type, self.method_code
+                    command = ?self.method_type,
+                    code = self.method_code,
+                    "Unknown command, returning empty success:"
                 );
-                // Return success with no params for unknown commands
                 ResponseBuilder::new(self.method_code).build()
             }
         }
     }
 
     fn handle_pms_enroll(&self, storage: &mut Storage) -> Vec<u8> {
-        info!("PMS Enroll");
-
-        // Get system type from params
-        let system_type = self
-            .params
-            .get(&(MethodParamType::PmsTypeT as i32))
-            .map(|v| {
-                if v.len() >= 4 {
-                    BigEndian::read_i32(v)
-                } else {
-                    0
-                }
-            })
-            .unwrap_or(0);
-
+        let system_type = self.get_param_i32(MethodParamType::PmsTypeT).unwrap_or(0);
         let privacy_data = storage.get_privacy_data_mut(system_type);
 
         // Get password type
-        if let Some(pwd_type) = self.params.get(&(MethodParamType::PmsPwdTypeT as i32)) {
-            if pwd_type.len() >= 4 {
-                privacy_data.password_type = BigEndian::read_i32(pwd_type);
-            }
+        if let Some(pwd_type) = self.get_param_i32(MethodParamType::PmsPwdTypeT) {
+            privacy_data.password_type = pwd_type;
         }
 
         // Get password info (hash)
@@ -200,22 +288,19 @@ impl StandardRequest {
         }
 
         // Generate a handler token (must be exactly 8 bytes for password verification)
-        // The verification combines SHA256(password) + handler into a 40-byte buffer
         privacy_data.handler = generate_random_bytes(8);
         privacy_data.enrolled = true;
         privacy_data.retry_count = 5;
         privacy_data.lock_time = 0;
 
         info!(
-            "PMS Enroll: system_type={}, password_type={}, handler_len={}",
             system_type,
-            privacy_data.password_type,
-            privacy_data.handler.len()
+            password_type = privacy_data.password_type,
+            handler_len = privacy_data.handler.len(),
+            "PMS Enroll: User enrolled successfully:"
         );
 
-        // Clone the handler before saving to avoid borrow checker issues
         let handler = privacy_data.handler.clone();
-
         storage.save();
 
         ResponseBuilder::new(self.method_code)
@@ -224,59 +309,30 @@ impl StandardRequest {
     }
 
     fn handle_pms_verify(&self, storage: &mut Storage) -> Vec<u8> {
-        info!("PMS Verify");
-
-        let system_type = self
-            .params
-            .get(&(MethodParamType::PmsTypeT as i32))
-            .map(|v| {
-                if v.len() >= 4 {
-                    BigEndian::read_i32(v)
-                } else {
-                    0
-                }
-            })
-            .unwrap_or(0);
-
+        let system_type = self.get_param_i32(MethodParamType::PmsTypeT).unwrap_or(0);
         let verify_type = self
-            .params
-            .get(&(MethodParamType::PmsVerifyTypeT as i32))
-            .map(|v| {
-                if v.len() >= 4 {
-                    BigEndian::read_i32(v)
-                } else {
-                    0
-                }
-            })
+            .get_param_i32(MethodParamType::PmsVerifyTypeT)
             .unwrap_or(0);
-
         let verify_buffer = self
             .params
             .get(&(MethodParamType::PmsVerifyBufferT as i32))
             .cloned();
 
-        info!(
-            "PMS Verify: system_type={}, verify_type={}, has_verify_buffer={}",
+        debug!(
             system_type,
             verify_type,
-            verify_buffer.is_some()
+            has_verify_buffer = verify_buffer.is_some(),
+            "PMS Verify request:"
         );
-
-        if let Some(ref buf) = verify_buffer {
-            debug!(
-                "  Verify buffer ({} bytes): {:02x?}",
-                buf.len(),
-                &buf[..std::cmp::min(32, buf.len())]
-            );
-        }
 
         let privacy_data = storage.get_privacy_data_mut(system_type);
 
         // Check if locked
         if privacy_data.lock_time > 0 {
             warn!(
-                "PMS Verify: Account is locked for {} seconds",
-                privacy_data.lock_time
+                system_type,
+                lock_time = privacy_data.lock_time,
+                "PMS Verify: Account is locked:"
             );
             return ResponseBuilder::new(self.method_code)
                 .result_code(-1)
@@ -286,16 +342,11 @@ impl StandardRequest {
 
         // Check if enrolled
         if !privacy_data.enrolled {
-            warn!("PMS Verify: Not enrolled for system_type={}", system_type);
+            warn!(system_type, "PMS Verify: Not enrolled:");
             return ResponseBuilder::new(self.method_code)
                 .result_code(-1)
                 .build();
         }
-
-        // Verify the password
-        // The client sends: SHA256(SHA256(password) + handler)
-        // We have stored: SHA256(password) as password_hash and handler
-        // So we compute: SHA256(password_hash + handler) and compare
 
         let verify_buffer = match verify_buffer {
             Some(buf) => buf,
@@ -316,61 +367,73 @@ impl StandardRequest {
         hasher.update(&combined);
         let expected_hash = hasher.finalize();
 
-        debug!(
-            "  Stored password_hash ({} bytes): {:02x?}",
-            privacy_data.password_hash.len(),
-            &privacy_data.password_hash[..std::cmp::min(32, privacy_data.password_hash.len())]
-        );
-        debug!(
-            "  Handler ({} bytes): {:02x?}",
-            privacy_data.handler.len(),
-            &privacy_data.handler
-        );
-        debug!("  Expected hash: {:02x?}", &expected_hash[..]);
-        debug!(
-            "  Received hash: {:02x?}",
-            &verify_buffer[..std::cmp::min(32, verify_buffer.len())]
-        );
-
         // Compare the hashes
         if verify_buffer.len() == 32 && verify_buffer[..] == expected_hash[..] {
             // Generate a challenge token (32 bytes) for successful verification
             let challenge = generate_random_bytes(32);
 
-            info!("PMS Verify: Password verified successfully!");
+            info!(
+                system_type,
+                verify_type, "PMS Verify: Password verified successfully:"
+            );
 
             // Reset retry count on success
             privacy_data.retry_count = 5;
 
-            // Clone values before releasing the borrow
-            let handler = privacy_data.handler.clone();
+            // Store challenge for modify operation
+            debug!(
+                challenge_preview = format!(
+                    "[{:02x} {:02x} {:02x} {:02x} ...]",
+                    challenge[0], challenge[1], challenge[2], challenge[3]
+                ),
+                "Stored challenge for modify:"
+            );
+
+            // Generate new handler after successful verify
+            let new_handler = generate_random_bytes(8);
+            info!(
+                handler = format!(
+                    "[{:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}]",
+                    new_handler[0],
+                    new_handler[1],
+                    new_handler[2],
+                    new_handler[3],
+                    new_handler[4],
+                    new_handler[5],
+                    new_handler[6],
+                    new_handler[7]
+                ),
+                "Generated new handler after verify:"
+            );
+            privacy_data.handler = new_handler.clone();
 
             storage.save();
 
             ResponseBuilder::new(self.method_code)
                 .add_param(MethodParamType::PmsChallengeT, challenge)
-                .add_param(MethodParamType::PmsHandlerT, handler)
+                .add_param(MethodParamType::PmsHandlerT, new_handler)
                 .build()
         } else {
             // Decrement retry count
             privacy_data.retry_count = (privacy_data.retry_count - 1).max(0);
 
             warn!(
-                "PMS Verify: Password mismatch! Retries left: {}",
-                privacy_data.retry_count
+                system_type,
+                retries_left = privacy_data.retry_count,
+                "PMS Verify: Password mismatch:"
             );
 
             // Lock account if no retries left
             if privacy_data.retry_count == 0 {
-                privacy_data.lock_time = 30; // Lock for 30 seconds
+                privacy_data.lock_time = 30;
                 warn!(
-                    "PMS Verify: Account locked for {} seconds",
-                    privacy_data.lock_time
+                    system_type,
+                    lock_time = privacy_data.lock_time,
+                    "PMS Verify: Account locked:"
                 );
             }
 
             let retry_count = privacy_data.retry_count;
-
             storage.save();
 
             ResponseBuilder::new(self.method_code)
@@ -381,27 +444,12 @@ impl StandardRequest {
     }
 
     fn handle_pms_modify(&self, storage: &mut Storage) -> Vec<u8> {
-        info!("PMS Modify");
-
-        let system_type = self
-            .params
-            .get(&(MethodParamType::PmsTypeT as i32))
-            .map(|v| {
-                if v.len() >= 4 {
-                    BigEndian::read_i32(v)
-                } else {
-                    0
-                }
-            })
-            .unwrap_or(0);
-
+        let system_type = self.get_param_i32(MethodParamType::PmsTypeT).unwrap_or(0);
         let privacy_data = storage.get_privacy_data_mut(system_type);
 
         // Update password type if provided
-        if let Some(pwd_type) = self.params.get(&(MethodParamType::PmsPwdTypeT as i32)) {
-            if pwd_type.len() >= 4 {
-                privacy_data.password_type = BigEndian::read_i32(pwd_type);
-            }
+        if let Some(pwd_type) = self.get_param_i32(MethodParamType::PmsPwdTypeT) {
+            privacy_data.password_type = pwd_type;
         }
 
         // Update password info if provided
@@ -414,46 +462,28 @@ impl StandardRequest {
             privacy_data.email = String::from_utf8_lossy(email).to_string();
         }
 
-        storage.save();
+        info!(
+            system_type,
+            password_type = privacy_data.password_type,
+            "PMS Modify: Password updated:"
+        );
 
+        storage.save();
         ResponseBuilder::new(self.method_code).build()
     }
 
     fn handle_pms_delete(&self, storage: &mut Storage) -> Vec<u8> {
-        info!("PMS Delete");
-
-        let system_type = self
-            .params
-            .get(&(MethodParamType::PmsTypeT as i32))
-            .map(|v| {
-                if v.len() >= 4 {
-                    BigEndian::read_i32(v)
-                } else {
-                    0
-                }
-            })
-            .unwrap_or(0);
+        let system_type = self.get_param_i32(MethodParamType::PmsTypeT).unwrap_or(0);
 
         storage.reset_privacy_data(system_type);
         storage.save();
 
+        info!(system_type, "PMS Delete: Privacy data deleted:");
         ResponseBuilder::new(self.method_code).build()
     }
 
     fn handle_pms_get_info(&self, storage: &mut Storage) -> Vec<u8> {
-        info!("PMS Get Info");
-
-        let system_type = self
-            .params
-            .get(&(MethodParamType::PmsTypeT as i32))
-            .map(|v| {
-                if v.len() >= 4 {
-                    BigEndian::read_i32(v)
-                } else {
-                    0
-                }
-            })
-            .unwrap_or(0);
+        let system_type = self.get_param_i32(MethodParamType::PmsTypeT).unwrap_or(0);
 
         let privacy_data = storage
             .get_privacy_data(system_type)
@@ -461,12 +491,13 @@ impl StandardRequest {
             .unwrap_or_default();
 
         info!(
-            "PMS Get Info: system_type={}, password_type={}, enrolled={}, handler_len={}, retry_count={}",
             system_type,
-            privacy_data.password_type,
-            privacy_data.enrolled,
-            privacy_data.handler.len(),
-            privacy_data.retry_count
+            enrolled = privacy_data.enrolled,
+            password_type = privacy_data.password_type,
+            retry_count = privacy_data.retry_count,
+            lock_time = privacy_data.lock_time,
+            has_handler = !privacy_data.handler.is_empty(),
+            "PMS GetInfo:"
         );
 
         let mut builder = ResponseBuilder::new(self.method_code)
@@ -487,9 +518,6 @@ impl StandardRequest {
 
         if !privacy_data.handler.is_empty() {
             builder = builder.add_param(MethodParamType::PmsHandlerT, privacy_data.handler.clone());
-            debug!("  Added handler: {:02x?}", privacy_data.handler);
-        } else {
-            warn!("  No handler found for system_type={}", system_type);
         }
 
         if !privacy_data.email.is_empty() {
@@ -500,14 +528,16 @@ impl StandardRequest {
     }
 
     fn handle_pms_request_encrypt_data(&self, _storage: &mut Storage) -> Vec<u8> {
-        info!("PMS Request Encrypt Data");
-
-        // For stub, return the input data as-is (no actual encryption)
         let encrypted_data = self
             .params
             .get(&(MethodParamType::PmsInfoBufferT as i32))
             .cloned()
             .unwrap_or_default();
+
+        info!(
+            data_len = encrypted_data.len(),
+            "PMS RequestEncryptData: Returning data as-is (stub):"
+        );
 
         ResponseBuilder::new(self.method_code)
             .add_param(MethodParamType::PmsEncBufferT, encrypted_data)
@@ -515,62 +545,34 @@ impl StandardRequest {
     }
 
     fn handle_pms_reset_all_data(&self, storage: &mut Storage) -> Vec<u8> {
-        info!("PMS Reset All Data");
-
-        let system_type = self
-            .params
-            .get(&(MethodParamType::PmsTypeT as i32))
-            .map(|v| {
-                if v.len() >= 4 {
-                    BigEndian::read_i32(v)
-                } else {
-                    0
-                }
-            })
-            .unwrap_or(0);
+        let system_type = self.get_param_i32(MethodParamType::PmsTypeT).unwrap_or(0);
 
         storage.reset_privacy_data(system_type);
         storage.save();
 
+        info!(system_type, "PMS ResetAllData: All data reset:");
         ResponseBuilder::new(self.method_code).build()
     }
 
     fn handle_set_lock_screen_pwd_type(&self, storage: &mut Storage) -> Vec<u8> {
-        info!("Set Lock Screen Password Type");
-
         let user_id = self
-            .params
-            .get(&(MethodParamType::PmsPwdUseridT as i32))
-            .map(|v| {
-                if v.len() >= 4 {
-                    BigEndian::read_i32(v)
-                } else {
-                    0
-                }
-            })
+            .get_param_i32(MethodParamType::PmsPwdUseridT)
             .unwrap_or(0);
-
         let pwd_type = self
-            .params
-            .get(&(MethodParamType::PmsPwdTypeT as i32))
-            .map(|v| {
-                if v.len() >= 4 {
-                    BigEndian::read_i32(v)
-                } else {
-                    0
-                }
-            })
+            .get_param_i32(MethodParamType::PmsPwdTypeT)
             .unwrap_or(0);
 
         storage.set_lock_screen_pwd_type(user_id, pwd_type);
         storage.save();
 
+        info!(
+            user_id,
+            pwd_type, "SetLockScreenPwdType: Password type set:"
+        );
         ResponseBuilder::new(self.method_code).build()
     }
 
     fn handle_get_rpmb_value(&self, storage: &mut Storage) -> Vec<u8> {
-        info!("Get RPMB Value");
-
         let key = self
             .params
             .get(&(MethodParamType::PmsCommonBuffer0T as i32))
@@ -579,45 +581,33 @@ impl StandardRequest {
 
         let value = storage.get_rpmb_value(&key).cloned().unwrap_or_default();
 
+        info!(
+            key = %key,
+            value_len = value.len(),
+            "GetRpmbValue:"
+        );
+
         ResponseBuilder::new(self.method_code)
             .add_param(MethodParamType::PmsCommonBuffer1T, value)
             .build()
     }
 
     fn handle_store_old_password(&self, storage: &mut Storage) -> Vec<u8> {
-        info!("TA Store Old Password");
-
         let user_id = self
-            .params
-            .get(&(MethodParamType::PmsPwdUseridT as i32))
-            .map(|v| {
-                if v.len() >= 4 {
-                    BigEndian::read_i32(v)
-                } else {
-                    0
-                }
-            })
+            .get_param_i32(MethodParamType::PmsPwdUseridT)
             .unwrap_or(0);
-
         let pwd_data = storage.get_password_data_mut(user_id);
 
-        if let Some(old_pwd_type) = self.params.get(&(MethodParamType::PmsOldPwdTypeT as i32)) {
-            if old_pwd_type.len() >= 4 {
-                pwd_data.old_pwd_type = BigEndian::read_i32(old_pwd_type);
-            }
+        if let Some(old_pwd_type) = self.get_param_i32(MethodParamType::PmsOldPwdTypeT) {
+            pwd_data.old_pwd_type = old_pwd_type;
         }
 
         if let Some(old_pwd_buffer) = self.params.get(&(MethodParamType::PmsOldPwdBufferT as i32)) {
             pwd_data.old_pwd_buffer = old_pwd_buffer.clone();
         }
 
-        if let Some(current_pwd_type) = self
-            .params
-            .get(&(MethodParamType::PmsCurrentPwdTypeT as i32))
-        {
-            if current_pwd_type.len() >= 4 {
-                pwd_data.current_pwd_type = BigEndian::read_i32(current_pwd_type);
-            }
+        if let Some(current_pwd_type) = self.get_param_i32(MethodParamType::PmsCurrentPwdTypeT) {
+            pwd_data.current_pwd_type = current_pwd_type;
         }
 
         if let Some(current_pwd_buffer) = self
@@ -637,27 +627,34 @@ impl StandardRequest {
         }
 
         pwd_data.user_id = user_id;
+
+        // Capture values before releasing the mutable borrow
+        let old_pwd_type = pwd_data.old_pwd_type;
+        let current_pwd_type = pwd_data.current_pwd_type;
+
         storage.save();
+
+        info!(
+            user_id,
+            old_pwd_type, current_pwd_type, "TA StoreOldPassword: Password stored:"
+        );
 
         ResponseBuilder::new(self.method_code).build()
     }
 
     fn handle_retrieve_password_by_old_pwd(&self, storage: &mut Storage) -> Vec<u8> {
-        info!("TA Retrieve Password By Old Password");
-
         let user_id = self
-            .params
-            .get(&(MethodParamType::PmsPwdUseridT as i32))
-            .map(|v| {
-                if v.len() >= 4 {
-                    BigEndian::read_i32(v)
-                } else {
-                    0
-                }
-            })
+            .get_param_i32(MethodParamType::PmsPwdUseridT)
             .unwrap_or(0);
 
         if let Some(pwd_data) = storage.get_password_data(user_id) {
+            info!(
+                user_id,
+                current_pwd_type = pwd_data.current_pwd_type,
+                buffer_len = pwd_data.current_pwd_buffer.len(),
+                "TA RetrievePasswordByOldPwd: Found:"
+            );
+
             ResponseBuilder::new(self.method_code)
                 .add_param(
                     MethodParamType::PmsCurrentPasswordBuffer,
@@ -667,9 +664,10 @@ impl StandardRequest {
                     MethodParamType::PmsCurrentPasswordType,
                     pwd_data.current_pwd_type,
                 )
-                .add_param_i32(MethodParamType::PmsVerifyOldPwdResultT, 0) // Success
+                .add_param_i32(MethodParamType::PmsVerifyOldPwdResultT, 0)
                 .build()
         } else {
+            warn!(user_id, "TA RetrievePasswordByOldPwd: Not found:");
             ResponseBuilder::new(self.method_code)
                 .result_code(-1)
                 .build()
@@ -677,21 +675,12 @@ impl StandardRequest {
     }
 
     fn handle_password_retrieve_validity(&self, storage: &mut Storage) -> Vec<u8> {
-        info!("TA Password Retrieve Validity");
-
         let user_id = self
-            .params
-            .get(&(MethodParamType::PmsPwdUseridT as i32))
-            .map(|v| {
-                if v.len() >= 4 {
-                    BigEndian::read_i32(v)
-                } else {
-                    0
-                }
-            })
+            .get_param_i32(MethodParamType::PmsPwdUseridT)
             .unwrap_or(0);
-
         let is_valid = storage.get_password_data(user_id).is_some();
+
+        info!(user_id, is_valid, "TA PasswordRetrieveValidity:");
 
         ResponseBuilder::new(self.method_code)
             .add_param_i32(
@@ -702,34 +691,35 @@ impl StandardRequest {
     }
 
     fn handle_delete_old_password(&self, storage: &mut Storage) -> Vec<u8> {
-        info!("TA Delete Old Password");
-
         let user_id = self
-            .params
-            .get(&(MethodParamType::PmsPwdUseridT as i32))
-            .map(|v| {
-                if v.len() >= 4 {
-                    BigEndian::read_i32(v)
-                } else {
-                    0
-                }
-            })
+            .get_param_i32(MethodParamType::PmsPwdUseridT)
             .unwrap_or(0);
 
         storage.delete_password_data(user_id);
         storage.save();
 
+        info!(user_id, "TA DeleteOldPassword: Deleted:");
         ResponseBuilder::new(self.method_code).build()
     }
 
     fn handle_password_verify_result(&self, _storage: &mut Storage) -> Vec<u8> {
-        info!("TA Password Verify Result");
+        info!("TA PasswordVerifyResult: Returning success (stub):");
 
-        // For stub, always return success
         ResponseBuilder::new(self.method_code)
             .add_param_i32(MethodParamType::PmsVerifyOldPwdResultT, 0)
             .add_param_i32(MethodParamType::PmsOldPwdTryRemainingCount, 5)
             .build()
+    }
+
+    /// Helper to get an i32 parameter
+    fn get_param_i32(&self, param_type: MethodParamType) -> Option<i32> {
+        self.params.get(&(param_type as i32)).and_then(|v| {
+            if v.len() >= 4 {
+                Some(BigEndian::read_i32(v))
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -762,24 +752,29 @@ impl From<u8> for NativeCommand {
 impl NativeRequest {
     pub fn handle(&self, storage: &mut Storage) -> Vec<u8> {
         let cmd = NativeCommand::from(self.cmd_id);
-        info!("Handling native command: {:?} (id={})", cmd, self.cmd_id);
+        info!(
+            command = ?cmd,
+            cmd_id = self.cmd_id,
+            data_len = self.data.len(),
+            "Handling native command:"
+        );
         match cmd {
             NativeCommand::WriteSecret => self.handle_write_secret(storage),
             NativeCommand::PresetDataDec => self.handle_preset_data_dec(storage),
             NativeCommand::Unknown => {
-                warn!("Unknown native command: {}", self.cmd_id);
+                warn!(cmd_id = self.cmd_id, "Unknown native command:");
                 build_native_response(0, None)
             }
         }
     }
 
     fn handle_write_secret(&self, storage: &mut Storage) -> Vec<u8> {
-        info!("Native WriteSecret command");
-
-        // Parse the native format:
-        // [secret_length: 4 bytes LE][secret: N bytes][token_length: 4 bytes LE][token: M bytes]
+        // Parse: [secret_length: 4 bytes LE][secret: N bytes][token_length: 4 bytes LE][token: M bytes]
         if self.data.len() < 4 {
-            warn!("WriteSecret: buffer too short for secret length");
+            warn!(
+                data_len = self.data.len(),
+                "WriteSecret: Buffer too short for secret length:"
+            );
             return build_native_response(-1, None);
         }
 
@@ -787,7 +782,11 @@ impl NativeRequest {
         let mut offset = 4;
 
         if self.data.len() < offset + secret_length {
-            warn!("WriteSecret: buffer too short for secret data");
+            warn!(
+                data_len = self.data.len(),
+                expected = offset + secret_length,
+                "WriteSecret: Buffer too short for secret data:"
+            );
             return build_native_response(-1, None);
         }
 
@@ -795,7 +794,11 @@ impl NativeRequest {
         offset += secret_length;
 
         if self.data.len() < offset + 4 {
-            warn!("WriteSecret: buffer too short for token length");
+            warn!(
+                data_len = self.data.len(),
+                expected = offset + 4,
+                "WriteSecret: Buffer too short for token length:"
+            );
             return build_native_response(-1, None);
         }
 
@@ -803,18 +806,20 @@ impl NativeRequest {
         offset += 4;
 
         if self.data.len() < offset + token_length {
-            warn!("WriteSecret: buffer too short for token data");
+            warn!(
+                data_len = self.data.len(),
+                expected = offset + token_length,
+                "WriteSecret: Buffer too short for token data:"
+            );
             return build_native_response(-1, None);
         }
 
-        let _token = &self.data[offset..offset + token_length];
-
-        debug!(
-            "WriteSecret: secret_len={}, token_len={}",
-            secret_length, token_length
+        info!(
+            secret_len = secret_length,
+            token_len = token_length,
+            "WriteSecret: Stored secret:"
         );
 
-        // Store the secret
         storage.store_secret(secret_length as i32, secret.to_vec());
         storage.save();
 
@@ -822,12 +827,12 @@ impl NativeRequest {
     }
 
     fn handle_preset_data_dec(&self, _storage: &mut Storage) -> Vec<u8> {
-        info!("Native PresetDataDec command");
-
-        // Parse the native format:
-        // [aliBuf_len: 4 bytes LE][aliBuf: N bytes][enc_len: 4 bytes LE][enc: M bytes]
+        // Parse: [aliBuf_len: 4 bytes LE][aliBuf: N bytes][enc_len: 4 bytes LE][enc: M bytes]
         if self.data.len() < 4 {
-            warn!("PresetDataDec: buffer too short for aliBuf length");
+            warn!(
+                data_len = self.data.len(),
+                "PresetDataDec: Buffer too short for aliBuf length:"
+            );
             return build_native_response(-1, None);
         }
 
@@ -835,7 +840,11 @@ impl NativeRequest {
         let mut offset = 4;
 
         if self.data.len() < offset + ali_buf_len {
-            warn!("PresetDataDec: buffer too short for aliBuf data");
+            warn!(
+                data_len = self.data.len(),
+                expected = offset + ali_buf_len,
+                "PresetDataDec: Buffer too short for aliBuf data:"
+            );
             return build_native_response(-1, None);
         }
 
@@ -843,7 +852,11 @@ impl NativeRequest {
         offset += ali_buf_len;
 
         if self.data.len() < offset + 4 {
-            warn!("PresetDataDec: buffer too short for enc length");
+            warn!(
+                data_len = self.data.len(),
+                expected = offset + 4,
+                "PresetDataDec: Buffer too short for enc length:"
+            );
             return build_native_response(-1, None);
         }
 
@@ -851,19 +864,22 @@ impl NativeRequest {
         offset += 4;
 
         if self.data.len() < offset + enc_len {
-            warn!("PresetDataDec: buffer too short for enc data");
+            warn!(
+                data_len = self.data.len(),
+                expected = offset + enc_len,
+                "PresetDataDec: Buffer too short for enc data:"
+            );
             return build_native_response(-1, None);
         }
 
         let enc_data = &self.data[offset..offset + enc_len];
 
-        debug!(
-            "PresetDataDec: aliBuf={:?}, enc_len={}",
-            String::from_utf8_lossy(ali_buf),
-            enc_len
+        info!(
+            ali_buf = %String::from_utf8_lossy(ali_buf),
+            enc_len,
+            "PresetDataDec: Returning data as-is (stub):"
         );
 
-        // For stub, return the encrypted data as-is (no actual decryption)
         build_native_response(0, Some(enc_data))
     }
 }

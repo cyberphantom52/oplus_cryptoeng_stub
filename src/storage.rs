@@ -56,26 +56,26 @@ impl Storage {
             match fs::read_to_string(&path) {
                 Ok(content) => match serde_json::from_str(&content) {
                     Ok(storage) => {
-                        info!("Loaded storage from {:?}", path);
+                        info!(path = %path.display(), "Loaded storage:");
                         return storage;
                     }
                     Err(e) => {
-                        warn!("Failed to parse storage file: {}", e);
+                        warn!(path = %path.display(), error = %e, "Failed to parse storage file:");
                     }
                 },
                 Err(e) => {
-                    warn!("Failed to read storage file: {}", e);
+                    warn!(path = %path.display(), error = %e, "Failed to read storage file:");
                 }
             }
         }
-        info!("Creating new storage");
+        info!(path = %path.display(), "Creating new storage:");
         Self::new()
     }
 
     pub fn save(&self) {
         let path = PathBuf::from(STORAGE_DIR);
         if let Err(e) = fs::create_dir_all(&path) {
-            error!("Failed to create storage directory: {}", e);
+            error!(path = %path.display(), error = %e, "Failed to create storage directory:");
             return;
         }
 
@@ -83,13 +83,13 @@ impl Storage {
         match serde_json::to_string_pretty(self) {
             Ok(content) => {
                 if let Err(e) = fs::write(&file_path, content) {
-                    error!("Failed to write storage file: {}", e);
+                    error!(path = %file_path.display(), error = %e, "Failed to write storage file:");
                 } else {
-                    debug!("Saved storage to {:?}", file_path);
+                    debug!(path = %file_path.display(), "Saved storage:");
                 }
             }
             Err(e) => {
-                error!("Failed to serialize storage: {}", e);
+                error!(error = %e, "Failed to serialize storage:");
             }
         }
     }
