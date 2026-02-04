@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
 use crate::{
-    method::{MethodParamType, MethodType},
+    method::{MethodParamType, MethodType, PmsInfoType},
     response::{build_native_response, ResponseBuilder},
     storage::Storage,
     utils::generate_random_bytes,
@@ -106,7 +106,7 @@ impl Request {
                 "  Param:"
             );
 
-            params.insert(param_type_code, param_data);
+            params.insert(param_type, param_data);
         }
 
         Some(StandardRequest {
@@ -228,7 +228,7 @@ pub struct StandardRequest {
     pub method_code: i32,
     pub buffer_size: i32,
     pub param_count: i32,
-    pub params: HashMap<i32, Vec<u8>>,
+    pub params: HashMap<MethodParamType, Vec<u8>>,
 }
 
 impl StandardRequest {
@@ -278,12 +278,12 @@ impl StandardRequest {
         }
 
         // Get password info (hash)
-        if let Some(pwd_info) = self.params.get(&(MethodParamType::PmsPwdInfoT as i32)) {
+        if let Some(pwd_info) = self.params.get(&MethodParamType::PmsPwdInfoT) {
             privacy_data.password_hash = pwd_info.clone();
         }
 
         // Get email
-        if let Some(email) = self.params.get(&(MethodParamType::PmsHideEmailT as i32)) {
+        if let Some(email) = self.params.get(&MethodParamType::PmsHideEmailT) {
             privacy_data.email = String::from_utf8_lossy(email).to_string();
         }
 
@@ -313,10 +313,7 @@ impl StandardRequest {
         let verify_type = self
             .get_param_i32(MethodParamType::PmsVerifyTypeT)
             .unwrap_or(0);
-        let verify_buffer = self
-            .params
-            .get(&(MethodParamType::PmsVerifyBufferT as i32))
-            .cloned();
+        let verify_buffer = self.params.get(&MethodParamType::PmsVerifyBufferT).cloned();
 
         debug!(
             system_type,
@@ -409,7 +406,7 @@ impl StandardRequest {
                 ),
                 "Generated pending handler (will activate after modify):"
             );
-            
+
             // Store challenge and new handler as pending - DON'T update actual handler yet
             privacy_data.pending_challenge = challenge.clone();
             privacy_data.pending_handler = new_handler.clone();
@@ -452,26 +449,24 @@ impl StandardRequest {
 
     fn handle_pms_modify(&self, storage: &mut Storage) -> Vec<u8> {
         let system_type = self.get_param_i32(MethodParamType::PmsTypeT).unwrap_or(0);
-        
+
         // Get the challenge provided in the modify request
-        let challenge = self
-            .params
-            .get(&(MethodParamType::PmsChallengeT as i32))
-            .cloned();
-        
+        let challenge = self.params.get(&MethodParamType::PmsChallengeT).cloned();
+
         // Get the info type to determine what we're modifying
-        // 1 = password, 2 = security answer, 4 = email
-        let info_type = self.get_param_i32(MethodParamType::PmsInfoTypeT).unwrap_or(0);
-        
+        let info_type = PmsInfoType::from(
+            self.get_param_i32(MethodParamType::PmsInfoTypeT)
+                .unwrap_or(0),
+        );
+
         let privacy_data = storage.get_privacy_data_mut(system_type);
-        
+
         // Validate challenge
         if let Some(challenge) = &challenge {
-            if !privacy_data.pending_challenge.is_empty() && *challenge != privacy_data.pending_challenge {
-                warn!(
-                    system_type,
-                    "PMS Modify: Challenge mismatch:"
-                );
+            if !privacy_data.pending_challenge.is_empty()
+                && *challenge != privacy_data.pending_challenge
+            {
+                warn!(system_type, "PMS Modify: Challenge mismatch:");
                 return ResponseBuilder::new(self.method_code)
                     .result_code(-1)
                     .build();
@@ -482,7 +477,7 @@ impl StandardRequest {
                 "PMS Modify: Challenge validated:"
             );
         }
-        
+
         // Update password type if provided
         if let Some(pwd_type) = self.get_param_i32(MethodParamType::PmsPwdTypeT) {
             privacy_data.password_type = pwd_type;
@@ -490,9 +485,9 @@ impl StandardRequest {
 
         // Handle different info types
         match info_type {
-            1 => {
+            PmsInfoType::Password => {
                 // Password modification - read from PmsInfoBufferT (208)
-                if let Some(pwd_info) = self.params.get(&(MethodParamType::PmsInfoBufferT as i32)) {
+                if let Some(pwd_info) = self.params.get(&MethodParamType::PmsInfoBufferT) {
                     privacy_data.password_hash = pwd_info.clone();
                     info!(
                         system_type,
@@ -500,7 +495,7 @@ impl StandardRequest {
                         hash_len = pwd_info.len(),
                         "PMS Modify: Password hash updated:"
                     );
-                } else if let Some(pwd_info) = self.params.get(&(MethodParamType::PmsPwdInfoT as i32)) {
+                } else if let Some(pwd_info) = self.params.get(&MethodParamType::PmsPwdInfoT) {
                     // Fallback to old param type for compatibility
                     privacy_data.password_hash = pwd_info.clone();
                     info!(
@@ -511,9 +506,9 @@ impl StandardRequest {
                     );
                 }
             }
-            2 => {
+            PmsInfoType::SecurityAnswer => {
                 // Security answer modification
-                if let Some(answer_info) = self.params.get(&(MethodParamType::PmsInfoBufferT as i32)) {
+                if let Some(answer_info) = self.params.get(&MethodParamType::PmsInfoBufferT) {
                     debug!(
                         system_type,
                         answer_len = answer_info.len(),
@@ -522,32 +517,29 @@ impl StandardRequest {
                     // Store security answer if needed (currently not implemented)
                 }
             }
-            4 => {
+            PmsInfoType::Email => {
                 // Email modification
-                if let Some(email) = self.params.get(&(MethodParamType::PmsInfoBufferT as i32)) {
+                if let Some(email) = self.params.get(&MethodParamType::PmsInfoBufferT) {
                     privacy_data.email = String::from_utf8_lossy(email).to_string();
-                    info!(
-                        system_type,
-                        "PMS Modify: Email updated:"
-                    );
+                    info!(system_type, "PMS Modify: Email updated:");
                 }
             }
-            _ => {
+            PmsInfoType::Unknown => {
                 // Legacy handling: try to update based on what params are present
-                if let Some(pwd_info) = self.params.get(&(MethodParamType::PmsPwdInfoT as i32)) {
+                if let Some(pwd_info) = self.params.get(&MethodParamType::PmsPwdInfoT) {
                     privacy_data.password_hash = pwd_info.clone();
                 }
-                if let Some(email) = self.params.get(&(MethodParamType::PmsHideEmailT as i32)) {
+                if let Some(email) = self.params.get(&MethodParamType::PmsHideEmailT) {
                     privacy_data.email = String::from_utf8_lossy(email).to_string();
                 }
                 info!(
                     system_type,
-                    info_type,
+                    ?info_type,
                     "PMS Modify: Updated with legacy params:"
                 );
             }
         }
-        
+
         // Update the handler to the pending handler (generated during verify)
         // and clear the pending state
         let new_handler = if !privacy_data.pending_handler.is_empty() {
@@ -568,15 +560,12 @@ impl StandardRequest {
             // Generate a new handler if no pending one exists
             let handler = generate_random_bytes(8);
             privacy_data.handler = handler.clone();
-            info!(
-                system_type,
-                "PMS Modify: Generated new handler:"
-            );
+            info!(system_type, "PMS Modify: Generated new handler:");
             handler
         };
 
         storage.save();
-        
+
         // Return success with new handler
         ResponseBuilder::new(self.method_code)
             .add_param(MethodParamType::PmsHandlerT, new_handler)
@@ -641,7 +630,7 @@ impl StandardRequest {
     fn handle_pms_request_encrypt_data(&self, _storage: &mut Storage) -> Vec<u8> {
         let encrypted_data = self
             .params
-            .get(&(MethodParamType::PmsInfoBufferT as i32))
+            .get(&MethodParamType::PmsInfoBufferT)
             .cloned()
             .unwrap_or_default();
 
@@ -686,7 +675,7 @@ impl StandardRequest {
     fn handle_get_rpmb_value(&self, storage: &mut Storage) -> Vec<u8> {
         let key = self
             .params
-            .get(&(MethodParamType::PmsCommonBuffer0T as i32))
+            .get(&MethodParamType::PmsCommonBuffer0T)
             .map(|v| String::from_utf8_lossy(v).to_string())
             .unwrap_or_default();
 
@@ -713,7 +702,7 @@ impl StandardRequest {
             pwd_data.old_pwd_type = old_pwd_type;
         }
 
-        if let Some(old_pwd_buffer) = self.params.get(&(MethodParamType::PmsOldPwdBufferT as i32)) {
+        if let Some(old_pwd_buffer) = self.params.get(&MethodParamType::PmsOldPwdBufferT) {
             pwd_data.old_pwd_buffer = old_pwd_buffer.clone();
         }
 
@@ -721,17 +710,11 @@ impl StandardRequest {
             pwd_data.current_pwd_type = current_pwd_type;
         }
 
-        if let Some(current_pwd_buffer) = self
-            .params
-            .get(&(MethodParamType::PmsCurrentPwdBufferT as i32))
-        {
+        if let Some(current_pwd_buffer) = self.params.get(&MethodParamType::PmsCurrentPwdBufferT) {
             pwd_data.current_pwd_buffer = current_pwd_buffer.clone();
         }
 
-        if let Some(system_time) = self
-            .params
-            .get(&(MethodParamType::PmsPwdSystemTimeT as i32))
-        {
+        if let Some(system_time) = self.params.get(&MethodParamType::PmsPwdSystemTimeT) {
             if system_time.len() >= 8 {
                 pwd_data.system_time = BigEndian::read_i64(system_time);
             }
@@ -824,7 +807,7 @@ impl StandardRequest {
 
     /// Helper to get an i32 parameter
     fn get_param_i32(&self, param_type: MethodParamType) -> Option<i32> {
-        self.params.get(&(param_type as i32)).and_then(|v| {
+        self.params.get(&param_type).and_then(|v| {
             if v.len() >= 4 {
                 Some(BigEndian::read_i32(v))
             } else {

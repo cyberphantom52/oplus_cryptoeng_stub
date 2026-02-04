@@ -1,5 +1,26 @@
 use serde::{Deserialize, Serialize};
 
+/// Info type for PMS modify operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(i32)]
+pub enum PmsInfoType {
+    Password = 1,
+    SecurityAnswer = 2,
+    Email = 4,
+    Unknown = -1,
+}
+
+impl From<i32> for PmsInfoType {
+    fn from(code: i32) -> Self {
+        match code {
+            1 => PmsInfoType::Password,
+            2 => PmsInfoType::SecurityAnswer,
+            4 => PmsInfoType::Email,
+            _ => PmsInfoType::Unknown,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum MethodType {
