@@ -1,0 +1,11 @@
+[package]
+name = "oplus_cryptoeng_stub"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1.89"
+rsbinder = "0.5.0"
+
+[build-dependencies]
+rsbinder-aidl = "0.5.0"
