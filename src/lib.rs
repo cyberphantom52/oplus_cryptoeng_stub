@@ -1,6 +1,4 @@
-mod command;
 mod method;
-mod parser;
 mod request;
 mod response;
 mod storage;
@@ -13,8 +11,6 @@ use tracing::{debug, error, info, warn};
 
 include!(concat!(env!("OUT_DIR"), "/cryptoeng.rs"));
 
-use crate::command::{handle_native_command, handle_standard_command};
-use crate::parser::parse_request;
 use crate::request::Request;
 use crate::response::build_native_response;
 use crate::storage::{Storage, STORAGE_DIR};
@@ -62,14 +58,14 @@ impl ICryptoeng for CryptoengService {
             &request[..std::cmp::min(64, request.len())]
         );
 
-        let response = match parse_request(request) {
+        let response = match Request::parse(request) {
             Some(Request::Standard(req)) => {
                 let mut storage = self.storage.write().unwrap();
-                handle_standard_command(&req, &mut storage)
+                req.handle(&mut storage)
             }
             Some(Request::Native(req)) => {
                 let mut storage = self.storage.write().unwrap();
-                handle_native_command(&req, &mut storage)
+                req.handle(&mut storage)
             }
             None => {
                 warn!("Failed to parse request");
@@ -225,7 +221,7 @@ mod tests {
     fn test_parse_native_command() {
         // Native command format: [cmd_id][0][0][0][data...]
         let request = vec![8u8, 0, 0, 0, 0, 0, 0, 0];
-        let parsed = parse_request(&request);
+        let parsed = Request::parse(&request);
         assert!(matches!(parsed, Some(Request::Native(_))));
         if let Some(Request::Native(req)) = parsed {
             assert_eq!(req.cmd_id, 8);
@@ -249,7 +245,7 @@ mod tests {
         // Param data = 0
         request.extend_from_slice(&0i32.to_be_bytes());
 
-        let parsed = parse_request(&request);
+        let parsed = Request::parse(&request);
         assert!(matches!(parsed, Some(Request::Standard(_))));
         if let Some(Request::Standard(req)) = parsed {
             assert_eq!(req.method_type, MethodType::CeCmdPmsGetInfo);
