@@ -17,6 +17,12 @@ pub struct PrivacyData {
     pub secure_question_retry_count: i32,
     pub secure_question_lock_time: i32,
     pub enrolled: bool,
+    /// Challenge generated after successful verify, used to authorize modify operations
+    #[serde(default)]
+    pub pending_challenge: Vec<u8>,
+    /// New handler to be set after successful modify (generated during verify)
+    #[serde(default)]
+    pub pending_handler: Vec<u8>,
 }
 
 /// Stored password data

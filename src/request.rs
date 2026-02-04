@@ -369,8 +369,9 @@ impl StandardRequest {
 
         // Compare the hashes
         if verify_buffer.len() == 32 && verify_buffer[..] == expected_hash[..] {
-            // Generate a challenge token (32 bytes) for successful verification
-            let challenge = generate_random_bytes(32);
+            // Generate a challenge token (64 bytes) for successful verification
+            // The challenge must be 64 bytes to match what modifyPasswordByChallenge expects
+            let challenge = generate_random_bytes(64);
 
             info!(
                 system_type,
@@ -386,10 +387,13 @@ impl StandardRequest {
                     "[{:02x} {:02x} {:02x} {:02x} ...]",
                     challenge[0], challenge[1], challenge[2], challenge[3]
                 ),
+                challenge_len = challenge.len(),
                 "Stored challenge for modify:"
             );
 
-            // Generate new handler after successful verify
+            // Generate new handler to be used after successful modify
+            // We store it as pending and DON'T update the actual handler yet
+            // This allows subsequent verify calls to still work with the old handler
             let new_handler = generate_random_bytes(8);
             info!(
                 handler = format!(
@@ -403,9 +407,12 @@ impl StandardRequest {
                     new_handler[6],
                     new_handler[7]
                 ),
-                "Generated new handler after verify:"
+                "Generated pending handler (will activate after modify):"
             );
-            privacy_data.handler = new_handler.clone();
+            
+            // Store challenge and new handler as pending - DON'T update actual handler yet
+            privacy_data.pending_challenge = challenge.clone();
+            privacy_data.pending_handler = new_handler.clone();
 
             storage.save();
 
@@ -445,31 +452,135 @@ impl StandardRequest {
 
     fn handle_pms_modify(&self, storage: &mut Storage) -> Vec<u8> {
         let system_type = self.get_param_i32(MethodParamType::PmsTypeT).unwrap_or(0);
+        
+        // Get the challenge provided in the modify request
+        let challenge = self
+            .params
+            .get(&(MethodParamType::PmsChallengeT as i32))
+            .cloned();
+        
+        // Get the info type to determine what we're modifying
+        // 1 = password, 2 = security answer, 4 = email
+        let info_type = self.get_param_i32(MethodParamType::PmsInfoTypeT).unwrap_or(0);
+        
         let privacy_data = storage.get_privacy_data_mut(system_type);
-
+        
+        // Validate challenge
+        if let Some(challenge) = &challenge {
+            if !privacy_data.pending_challenge.is_empty() && *challenge != privacy_data.pending_challenge {
+                warn!(
+                    system_type,
+                    "PMS Modify: Challenge mismatch:"
+                );
+                return ResponseBuilder::new(self.method_code)
+                    .result_code(-1)
+                    .build();
+            }
+            debug!(
+                system_type,
+                challenge_len = challenge.len(),
+                "PMS Modify: Challenge validated:"
+            );
+        }
+        
         // Update password type if provided
         if let Some(pwd_type) = self.get_param_i32(MethodParamType::PmsPwdTypeT) {
             privacy_data.password_type = pwd_type;
         }
 
-        // Update password info if provided
-        if let Some(pwd_info) = self.params.get(&(MethodParamType::PmsPwdInfoT as i32)) {
-            privacy_data.password_hash = pwd_info.clone();
+        // Handle different info types
+        match info_type {
+            1 => {
+                // Password modification - read from PmsInfoBufferT (208)
+                if let Some(pwd_info) = self.params.get(&(MethodParamType::PmsInfoBufferT as i32)) {
+                    privacy_data.password_hash = pwd_info.clone();
+                    info!(
+                        system_type,
+                        password_type = privacy_data.password_type,
+                        hash_len = pwd_info.len(),
+                        "PMS Modify: Password hash updated:"
+                    );
+                } else if let Some(pwd_info) = self.params.get(&(MethodParamType::PmsPwdInfoT as i32)) {
+                    // Fallback to old param type for compatibility
+                    privacy_data.password_hash = pwd_info.clone();
+                    info!(
+                        system_type,
+                        password_type = privacy_data.password_type,
+                        hash_len = pwd_info.len(),
+                        "PMS Modify: Password hash updated (via PmsPwdInfoT):"
+                    );
+                }
+            }
+            2 => {
+                // Security answer modification
+                if let Some(answer_info) = self.params.get(&(MethodParamType::PmsInfoBufferT as i32)) {
+                    debug!(
+                        system_type,
+                        answer_len = answer_info.len(),
+                        "PMS Modify: Security answer updated:"
+                    );
+                    // Store security answer if needed (currently not implemented)
+                }
+            }
+            4 => {
+                // Email modification
+                if let Some(email) = self.params.get(&(MethodParamType::PmsInfoBufferT as i32)) {
+                    privacy_data.email = String::from_utf8_lossy(email).to_string();
+                    info!(
+                        system_type,
+                        "PMS Modify: Email updated:"
+                    );
+                }
+            }
+            _ => {
+                // Legacy handling: try to update based on what params are present
+                if let Some(pwd_info) = self.params.get(&(MethodParamType::PmsPwdInfoT as i32)) {
+                    privacy_data.password_hash = pwd_info.clone();
+                }
+                if let Some(email) = self.params.get(&(MethodParamType::PmsHideEmailT as i32)) {
+                    privacy_data.email = String::from_utf8_lossy(email).to_string();
+                }
+                info!(
+                    system_type,
+                    info_type,
+                    "PMS Modify: Updated with legacy params:"
+                );
+            }
         }
-
-        // Update email if provided
-        if let Some(email) = self.params.get(&(MethodParamType::PmsHideEmailT as i32)) {
-            privacy_data.email = String::from_utf8_lossy(email).to_string();
-        }
-
-        info!(
-            system_type,
-            password_type = privacy_data.password_type,
-            "PMS Modify: Password updated:"
-        );
+        
+        // Update the handler to the pending handler (generated during verify)
+        // and clear the pending state
+        let new_handler = if !privacy_data.pending_handler.is_empty() {
+            let handler = privacy_data.pending_handler.clone();
+            privacy_data.handler = handler.clone();
+            privacy_data.pending_handler.clear();
+            privacy_data.pending_challenge.clear();
+            info!(
+                system_type,
+                handler_preview = format!(
+                    "[{:02x} {:02x} {:02x} {:02x} ...]",
+                    handler[0], handler[1], handler[2], handler[3]
+                ),
+                "PMS Modify: Handler activated from pending:"
+            );
+            handler
+        } else {
+            // Generate a new handler if no pending one exists
+            let handler = generate_random_bytes(8);
+            privacy_data.handler = handler.clone();
+            info!(
+                system_type,
+                "PMS Modify: Generated new handler:"
+            );
+            handler
+        };
 
         storage.save();
-        ResponseBuilder::new(self.method_code).build()
+        
+        // Return success with new handler
+        ResponseBuilder::new(self.method_code)
+            .add_param(MethodParamType::PmsHandlerT, new_handler)
+            .build()
     }
 
     fn handle_pms_delete(&self, storage: &mut Storage) -> Vec<u8> {
