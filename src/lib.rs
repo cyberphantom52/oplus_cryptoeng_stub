@@ -25,10 +25,6 @@ pub const INTERFACE_HASH: &str = "765136eb397eb5b85ee1e089d8fec72c15e266b3";
 #[allow(dead_code)]
 const BUFFER_SIZE: i32 = 10000;
 
-// ============================================================================
-// Cryptoeng Service Implementation
-// ============================================================================
-
 /// Main cryptoeng service with storage backend
 pub struct CryptoengService {
     storage: Arc<RwLock<Storage>>,

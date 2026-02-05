@@ -28,29 +28,36 @@ register_handler!(
 
 fn handle_store_old_password(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
     let user_id = request
-        .get_param_i32(MethodParamType::PmsPwdUseridT)
+        .get_param(MethodParamType::PmsPwdUseridT)
+        .and_then(|p| p.as_i32())
         .unwrap_or(0);
     let pwd_data = storage.get_password_data_mut(user_id);
 
-    if let Some(old_pwd_type) = request.get_param_i32(MethodParamType::PmsOldPwdTypeT) {
+    if let Some(old_pwd_type) = request
+        .get_param(MethodParamType::PmsOldPwdTypeT)
+        .and_then(|p| p.as_i32())
+    {
         pwd_data.old_pwd_type = old_pwd_type;
     }
 
-    if let Some(old_pwd_buffer) = request.params.get(&MethodParamType::PmsOldPwdBufferT) {
-        pwd_data.old_pwd_buffer = old_pwd_buffer.clone();
+    if let Some(old_pwd_buffer) = request.get_param(MethodParamType::PmsOldPwdBufferT) {
+        pwd_data.old_pwd_buffer = old_pwd_buffer.data().to_vec();
     }
 
-    if let Some(current_pwd_type) = request.get_param_i32(MethodParamType::PmsCurrentPwdTypeT) {
+    if let Some(current_pwd_type) = request
+        .get_param(MethodParamType::PmsCurrentPwdTypeT)
+        .and_then(|p| p.as_i32())
+    {
         pwd_data.current_pwd_type = current_pwd_type;
     }
 
-    if let Some(current_pwd_buffer) = request.params.get(&MethodParamType::PmsCurrentPwdBufferT) {
-        pwd_data.current_pwd_buffer = current_pwd_buffer.clone();
+    if let Some(current_pwd_buffer) = request.get_param(MethodParamType::PmsCurrentPwdBufferT) {
+        pwd_data.current_pwd_buffer = current_pwd_buffer.data().to_vec();
     }
 
-    if let Some(system_time) = request.params.get(&MethodParamType::PmsPwdSystemTimeT) {
-        if system_time.len() >= 8 {
-            pwd_data.system_time = BigEndian::read_i64(system_time);
+    if let Some(system_time) = request.get_param(MethodParamType::PmsPwdSystemTimeT) {
+        if system_time.data().len() >= 8 {
+            pwd_data.system_time = BigEndian::read_i64(system_time.data());
         }
     }
 
@@ -75,7 +82,8 @@ fn handle_retrieve_password_by_old_pwd(
     storage: &mut Storage,
 ) -> Vec<u8> {
     let user_id = request
-        .get_param_i32(MethodParamType::PmsPwdUseridT)
+        .get_param(MethodParamType::PmsPwdUseridT)
+        .and_then(|p| p.as_i32())
         .unwrap_or(0);
 
     if let Some(pwd_data) = storage.get_password_data(user_id) {
@@ -110,7 +118,8 @@ fn handle_retrieve_password_by_old_pwd(
 
 fn handle_password_retrieve_validity(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
     let user_id = request
-        .get_param_i32(MethodParamType::PmsPwdUseridT)
+        .get_param(MethodParamType::PmsPwdUseridT)
+        .and_then(|p| p.as_i32())
         .unwrap_or(0);
     let is_valid = storage.get_password_data(user_id).is_some();
 
@@ -126,7 +135,8 @@ fn handle_password_retrieve_validity(request: &StandardRequest, storage: &mut St
 
 fn handle_delete_old_password(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
     let user_id = request
-        .get_param_i32(MethodParamType::PmsPwdUseridT)
+        .get_param(MethodParamType::PmsPwdUseridT)
+        .and_then(|p| p.as_i32())
         .unwrap_or(0);
 
     storage.delete_password_data(user_id);

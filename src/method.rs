@@ -27,6 +27,20 @@ impl Parameter {
         }
     }
 
+    /// Get the raw data
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// Try to read the data as a big-endian i32
+    pub fn as_i32(&self) -> Option<i32> {
+        if self.data.len() >= 4 {
+            Some(BigEndian::read_i32(&self.data))
+        } else {
+            None
+        }
+    }
+
     /// Serialize the parameter to big-endian bytes (type + length + data)
     pub fn to_be_bytes(&self) -> Vec<u8> {
         let mut result = Vec::with_capacity(8 + self.data.len());

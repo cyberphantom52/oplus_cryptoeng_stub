@@ -14,10 +14,12 @@ register_handler!(MethodType::CeCmdGetRpmbValue, handle_get_rpmb_value);
 
 fn handle_set_lock_screen_pwd_type(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
     let user_id = request
-        .get_param_i32(MethodParamType::PmsPwdUseridT)
+        .get_param(MethodParamType::PmsPwdUseridT)
+        .and_then(|p| p.as_i32())
         .unwrap_or(0);
     let pwd_type = request
-        .get_param_i32(MethodParamType::PmsPwdTypeT)
+        .get_param(MethodParamType::PmsPwdTypeT)
+        .and_then(|p| p.as_i32())
         .unwrap_or(0);
 
     storage.set_lock_screen_pwd_type(user_id, pwd_type);
@@ -32,9 +34,8 @@ fn handle_set_lock_screen_pwd_type(request: &StandardRequest, storage: &mut Stor
 
 fn handle_get_rpmb_value(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
     let key = request
-        .params
-        .get(&MethodParamType::PmsCommonBuffer0T)
-        .map(|v| String::from_utf8_lossy(v).to_string())
+        .get_param(MethodParamType::PmsCommonBuffer0T)
+        .map(|p| String::from_utf8_lossy(p.data()).to_string())
         .unwrap_or_default();
 
     let value = storage.get_rpmb_value(&key).cloned().unwrap_or_default();

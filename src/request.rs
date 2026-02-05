@@ -3,7 +3,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     handlers,
-    method::{MethodParamType, MethodType},
+    method::{MethodParamType, MethodType, Parameter},
     response::ResponseBuilder,
     storage::Storage,
 };
@@ -35,113 +35,11 @@ impl Request {
     }
 }
 
-/// Format a parameter value for logging based on its type
-fn format_param_value(param_type: &MethodParamType, data: &[u8]) -> String {
-    match param_type {
-        // Integer parameters - show as decimal
-        MethodParamType::PmsTypeT
-        | MethodParamType::PmsPwdTypeT
-        | MethodParamType::PmsVerifyTypeT
-        | MethodParamType::PmsPwdRetryCountLeftT
-        | MethodParamType::PmsPwdLockTimeLeftT
-        | MethodParamType::PmsSecureQuestionRetryCountLeftT
-        | MethodParamType::PmsSecureQuestionLockTimeLeftT
-        | MethodParamType::PmsLatestSecureRulesT
-        | MethodParamType::PmsPwdUseridT
-        | MethodParamType::PmsOldPwdTypeT
-        | MethodParamType::PmsOldPwdLengthT
-        | MethodParamType::PmsCurrentPwdTypeT
-        | MethodParamType::PmsCurrentPwdLenT
-        | MethodParamType::PmsVerifyOldPwdResultT
-        | MethodParamType::PmsOldPwdTryRemainingCount
-        | MethodParamType::PmsOldPwdTryRemainingTime
-        | MethodParamType::PmsResultValidity => {
-            if data.len() >= 4 {
-                format!("{}", BigEndian::read_i32(data))
-            } else {
-                format!("<invalid: {} bytes>", data.len())
-            }
-        }
-
-        // Boolean-like parameters
-        MethodParamType::PmsHideEmailT => {
-            if data.len() >= 4 {
-                let val = BigEndian::read_i32(data);
-                if val == 0 {
-                    "false".to_string()
-                } else {
-                    "true".to_string()
-                }
-            } else {
-                format!("<invalid: {} bytes>", data.len())
-            }
-        }
-
-        // String parameters
-        MethodParamType::PmsAccountName => String::from_utf8_lossy(data).to_string(),
-
-        // Binary/hash parameters - show as hex with truncation
-        MethodParamType::PmsVerifyBufferT
-        | MethodParamType::PmsPwdInfoT
-        | MethodParamType::PmsSecureInfoBufferT
-        | MethodParamType::PmsChallengeT
-        | MethodParamType::PmsHandlerT
-        | MethodParamType::PmsEncBufferT
-        | MethodParamType::PmsOldPwdBufferT
-        | MethodParamType::PmsCurrentPwdBufferT
-        | MethodParamType::PmsCurrentPasswordBuffer => {
-            if data.len() <= 16 {
-                format!(
-                    "[{}]",
-                    data.iter()
-                        .map(|b| format!("{:02x}", b))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                )
-            } else {
-                format!(
-                    "[{} ... +{} more]",
-                    data[..8]
-                        .iter()
-                        .map(|b| format!("{:02x}", b))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                    data.len() - 8
-                )
-            }
-        }
-
-        // Default: show length and first few bytes
-        _ => {
-            if data.len() <= 8 {
-                format!(
-                    "{} bytes: [{}]",
-                    data.len(),
-                    data.iter()
-                        .map(|b| format!("{:02x}", b))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                )
-            } else {
-                format!(
-                    "{} bytes: [{} ...]",
-                    data.len(),
-                    data[..4]
-                        .iter()
-                        .map(|b| format!("{:02x}", b))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                )
-            }
-        }
-    }
-}
-
 /// Parsed standard request (cmdId > 100)
 #[derive(Debug, Clone)]
 pub struct StandardRequest {
     pub method_type: MethodType,
-    pub params: HashMap<MethodParamType, Vec<u8>>,
+    pub params: HashMap<MethodParamType, Parameter>,
 }
 
 impl TryFrom<&[u8]> for StandardRequest {
@@ -200,17 +98,15 @@ impl TryFrom<&[u8]> for StandardRequest {
             offset += param_len;
 
             let param_type = MethodParamType::from(param_type_code);
-            let value_preview = format_param_value(&param_type, &param_data);
+            let parameter = Parameter::new(param_type, param_data);
 
             debug!(
                 param_index = i,
-                param_type = ?param_type,
-                len = param_len,
-                value = %value_preview,
+                value = ?parameter,
                 "  Param:"
             );
 
-            params.insert(param_type, param_data);
+            params.insert(param_type, parameter);
         }
 
         Ok(StandardRequest {
@@ -243,15 +139,9 @@ impl StandardRequest {
         ResponseBuilder::standard(self.method_type).build()
     }
 
-    /// Helper to get an i32 parameter
-    pub fn get_param_i32(&self, param_type: MethodParamType) -> Option<i32> {
-        self.params.get(&param_type).and_then(|v| {
-            if v.len() >= 4 {
-                Some(BigEndian::read_i32(v))
-            } else {
-                None
-            }
-        })
+    /// Get a parameter by type
+    pub fn get_param(&self, param_type: MethodParamType) -> Option<&Parameter> {
+        self.params.get(&param_type)
     }
 }
 
