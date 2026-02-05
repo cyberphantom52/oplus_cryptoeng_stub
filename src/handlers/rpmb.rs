@@ -1,5 +1,6 @@
 use tracing::info;
 
+use crate::error::Result;
 use crate::method::{MethodParamType, MethodType, Parameter};
 use crate::register_handler;
 use crate::request::StandardRequest;
@@ -12,31 +13,28 @@ register_handler!(
 );
 register_handler!(MethodType::CeCmdGetRpmbValue, handle_get_rpmb_value);
 
-fn handle_set_lock_screen_pwd_type(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
+fn handle_set_lock_screen_pwd_type(
+    request: &StandardRequest,
+    storage: &mut Storage,
+) -> Result<Vec<u8>> {
     let user_id = request
-        .get_param(MethodParamType::PmsPwdUseridT)
-        .and_then(|p| p.as_i32())
-        .unwrap_or(0);
-    let pwd_type = request
-        .get_param(MethodParamType::PmsPwdTypeT)
-        .and_then(|p| p.as_i32())
-        .unwrap_or(0);
+        .get_param(MethodParamType::PmsPwdUseridT)?
+        .as_i32()?;
+    let pwd_type = request.get_param(MethodParamType::PmsPwdTypeT)?.as_i32()?;
 
     storage.set_lock_screen_pwd_type(user_id, pwd_type);
-    storage.save();
+    storage.save()?;
 
     info!(
         user_id,
         pwd_type, "SetLockScreenPwdType: Password type set:"
     );
-    ResponseBuilder::standard(request.method_type).build()
+    Ok(ResponseBuilder::standard(request.method_type).build())
 }
 
-fn handle_get_rpmb_value(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
-    let key = request
-        .get_param(MethodParamType::PmsCommonBuffer0T)
-        .map(|p| String::from_utf8_lossy(p.data()).to_string())
-        .unwrap_or_default();
+fn handle_get_rpmb_value(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
+    let key_param = request.get_param(MethodParamType::PmsCommonBuffer0T)?;
+    let key = String::from_utf8_lossy(key_param.data()).to_string();
 
     let value = storage.get_rpmb_value(&key).cloned().unwrap_or_default();
 
@@ -46,7 +44,7 @@ fn handle_get_rpmb_value(request: &StandardRequest, storage: &mut Storage) -> Ve
         "GetRpmbValue:"
     );
 
-    ResponseBuilder::standard(request.method_type)
+    Ok(ResponseBuilder::standard(request.method_type)
         .add_param(Parameter::new(MethodParamType::PmsCommonBuffer1T, value))
-        .build()
+        .build())
 }

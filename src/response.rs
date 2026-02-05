@@ -31,6 +31,7 @@ impl ResponseBuilder<Standard> {
     }
 
     /// Set the result code
+    #[allow(dead_code)]
     pub fn result_code(mut self, code: i32) -> Self {
         self.result_code = code;
         self

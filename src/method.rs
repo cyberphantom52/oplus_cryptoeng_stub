@@ -1,6 +1,8 @@
 use byteorder::{BigEndian, ByteOrder};
 use serde::{Deserialize, Serialize};
 
+use crate::CryptoengError;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parameter {
     ty: MethodParamType,
@@ -33,11 +35,15 @@ impl Parameter {
     }
 
     /// Try to read the data as a big-endian i32
-    pub fn as_i32(&self) -> Option<i32> {
+    pub fn as_i32(&self) -> Result<i32, CryptoengError> {
         if self.data.len() >= 4 {
-            Some(BigEndian::read_i32(&self.data))
+            Ok(BigEndian::read_i32(&self.data))
         } else {
-            None
+            Err(CryptoengError::InvalidParameterData {
+                param: self.ty,
+                expected: 4,
+                got: self.data.len(),
+            })
         }
     }
 

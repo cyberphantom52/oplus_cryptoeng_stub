@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, path::PathBuf};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
+
+use crate::error::{Result, StorageError};
 
 /// Storage directory for persistent data
 pub const STORAGE_DIR: &str = "/data/vendor/cryptoeng";
@@ -78,26 +80,16 @@ impl Storage {
         Self::new()
     }
 
-    pub fn save(&self) {
+    pub fn save(&self) -> Result<()> {
         let path = PathBuf::from(STORAGE_DIR);
-        if let Err(e) = fs::create_dir_all(&path) {
-            error!(path = %path.display(), error = %e, "Failed to create storage directory:");
-            return;
-        }
+        fs::create_dir_all(&path).map_err(StorageError::CreateDir)?;
 
         let file_path = path.join("storage.json");
-        match serde_json::to_string_pretty(self) {
-            Ok(content) => {
-                if let Err(e) = fs::write(&file_path, content) {
-                    error!(path = %file_path.display(), error = %e, "Failed to write storage file:");
-                } else {
-                    debug!(path = %file_path.display(), "Saved storage:");
-                }
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to serialize storage:");
-            }
-        }
+        let content = serde_json::to_string_pretty(self).map_err(StorageError::Serialize)?;
+        fs::write(&file_path, content).map_err(StorageError::Write)?;
+
+        debug!(path = %file_path.display(), "Saved storage:");
+        Ok(())
     }
 
     pub fn get_privacy_data(&self, system_type: i32) -> Option<&PrivacyData> {
@@ -120,6 +112,7 @@ impl Storage {
         self.password_data.remove(&user_id);
     }
 
+    #[allow(dead_code)]
     pub fn set_rpmb_value(&mut self, key: String, value: Vec<u8>) {
         self.rpmb_values.insert(key, value);
     }
@@ -132,6 +125,7 @@ impl Storage {
         self.lock_screen_pwd_types.insert(user_id, pwd_type);
     }
 
+    #[allow(dead_code)]
     pub fn get_lock_screen_pwd_type(&self, user_id: i32) -> Option<i32> {
         self.lock_screen_pwd_types.get(&user_id).copied()
     }

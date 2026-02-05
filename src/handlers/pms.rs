@@ -1,6 +1,7 @@
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
+use crate::error::{CryptoengError, Result};
 use crate::method::{MethodParamType, MethodType, Parameter, PmsInfoType};
 use crate::register_handler;
 use crate::request::StandardRequest;
@@ -19,28 +20,20 @@ register_handler!(
 );
 register_handler!(MethodType::CeCmdPmsResetAllData, handle_pms_reset_all_data);
 
-fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
-    let system_type = request
-        .get_param(MethodParamType::PmsTypeT)
-        .and_then(|p| p.as_i32())
-        .unwrap_or(0);
+fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
+    let system_type = request.get_param(MethodParamType::PmsTypeT)?.as_i32()?;
     let privacy_data = storage.get_privacy_data_mut(system_type);
 
-    // Get password type
-    if let Some(pwd_type) = request
-        .get_param(MethodParamType::PmsPwdTypeT)
-        .and_then(|p| p.as_i32())
-    {
-        privacy_data.password_type = pwd_type;
-    }
+    // Get password type (required for enrollment)
+    let pwd_type = request.get_param(MethodParamType::PmsPwdTypeT)?.as_i32()?;
+    privacy_data.password_type = pwd_type;
 
-    // Get password info (hash)
-    if let Some(pwd_info) = request.get_param(MethodParamType::PmsPwdInfoT) {
-        privacy_data.password_hash = pwd_info.data().to_vec();
-    }
+    // Get password info (hash) - required for enrollment
+    let pwd_info = request.get_param(MethodParamType::PmsPwdInfoT)?;
+    privacy_data.password_hash = pwd_info.data().to_vec();
 
-    // Get email
-    if let Some(email) = request.get_param(MethodParamType::PmsHideEmailT) {
+    // Get email (optional)
+    if let Ok(email) = request.get_param(MethodParamType::PmsHideEmailT) {
         privacy_data.email = String::from_utf8_lossy(email.data()).to_string();
     }
 
@@ -58,32 +51,21 @@ fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Vec<u8
     );
 
     let handler = privacy_data.handler.clone();
-    storage.save();
+    storage.save()?;
 
-    ResponseBuilder::standard(request.method_type)
+    Ok(ResponseBuilder::standard(request.method_type)
         .add_param(Parameter::new(MethodParamType::PmsHandlerT, handler))
-        .build()
+        .build())
 }
 
-fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
-    let system_type = request
-        .get_param(MethodParamType::PmsTypeT)
-        .and_then(|p| p.as_i32())
-        .unwrap_or(0);
+fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
+    let system_type = request.get_param(MethodParamType::PmsTypeT)?.as_i32()?;
     let verify_type = request
         .get_param(MethodParamType::PmsVerifyTypeT)
         .and_then(|p| p.as_i32())
         .unwrap_or(0);
-    let verify_buffer = request
-        .get_param(MethodParamType::PmsVerifyBufferT)
-        .map(|p| p.data().to_vec());
 
-    debug!(
-        system_type,
-        verify_type,
-        has_verify_buffer = verify_buffer.is_some(),
-        "PMS Verify request:"
-    );
+    debug!(system_type, verify_type, "PMS Verify request:");
 
     let privacy_data = storage.get_privacy_data_mut(system_type);
 
@@ -94,32 +76,20 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Vec<u8
             lock_time = privacy_data.lock_time,
             "PMS Verify: Account is locked:"
         );
-        return ResponseBuilder::standard(request.method_type)
-            .result_code(-1)
-            .add_param(Parameter::from_i32(
-                MethodParamType::PmsPwdLockTimeLeftT,
-                privacy_data.lock_time,
-            ))
-            .build();
+        return Err(CryptoengError::AccountLocked {
+            system_type,
+            lock_time: privacy_data.lock_time,
+        });
     }
 
     // Check if enrolled
     if !privacy_data.enrolled {
         warn!(system_type, "PMS Verify: Not enrolled:");
-        return ResponseBuilder::standard(request.method_type)
-            .result_code(-1)
-            .build();
+        return Err(CryptoengError::NotEnrolled(system_type));
     }
 
-    let verify_buffer = match verify_buffer {
-        Some(buf) => buf,
-        None => {
-            warn!("PMS Verify: No verify buffer provided");
-            return ResponseBuilder::standard(request.method_type)
-                .result_code(-1)
-                .build();
-        }
-    };
+    let verify_buffer = request.get_param(MethodParamType::PmsVerifyBufferT)?;
+    let verify_data = verify_buffer.data().to_vec();
 
     // Compute expected hash: SHA256(stored_password_hash + handler)
     let mut combined = Vec::with_capacity(40);
@@ -131,7 +101,7 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Vec<u8
     let expected_hash = hasher.finalize();
 
     // Compare the hashes
-    if verify_buffer.len() == 32 && verify_buffer[..] == expected_hash[..] {
+    if verify_data.len() == 32 && verify_data[..] == expected_hash[..] {
         // Generate a challenge token (64 bytes) for successful verification
         // The challenge must be 64 bytes to match what modifyPasswordByChallenge expects
         let challenge = generate_random_bytes(64);
@@ -177,12 +147,12 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Vec<u8
         privacy_data.pending_challenge = challenge.clone();
         privacy_data.pending_handler = new_handler.clone();
 
-        storage.save();
+        storage.save()?;
 
-        ResponseBuilder::standard(request.method_type)
+        Ok(ResponseBuilder::standard(request.method_type)
             .add_param(Parameter::new(MethodParamType::PmsChallengeT, challenge))
             .add_param(Parameter::new(MethodParamType::PmsHandlerT, new_handler))
-            .build()
+            .build())
     } else {
         // Decrement retry count
         privacy_data.retry_count = (privacy_data.retry_count - 1).max(0);
@@ -203,26 +173,20 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Vec<u8
             );
         }
 
-        let retry_count = privacy_data.retry_count;
-        storage.save();
+        let retries_left = privacy_data.retry_count;
+        storage.save()?;
 
-        ResponseBuilder::standard(request.method_type)
-            .result_code(-1)
-            .add_param(Parameter::from_i32(
-                MethodParamType::PmsPwdRetryCountLeftT,
-                retry_count,
-            ))
-            .build()
+        Err(CryptoengError::VerificationFailed {
+            system_type,
+            retries_left,
+        })
     }
 }
 
-fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
-    let system_type = request
-        .get_param(MethodParamType::PmsTypeT)
-        .and_then(|p| p.as_i32())
-        .unwrap_or(0);
+fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
+    let system_type = request.get_param(MethodParamType::PmsTypeT)?.as_i32()?;
 
-    // Get the challenge provided in the modify request
+    // Get the challenge provided in the modify request (optional for some flows)
     let challenge = request
         .get_param(MethodParamType::PmsChallengeT)
         .map(|p| p.data().to_vec());
@@ -237,15 +201,13 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Vec<u8
 
     let privacy_data = storage.get_privacy_data_mut(system_type);
 
-    // Validate challenge
-    if let Some(challenge) = &challenge {
+    // Validate challenge if one was provided and we have a pending one
+    if let Ok(challenge) = &challenge {
         if !privacy_data.pending_challenge.is_empty()
             && *challenge != privacy_data.pending_challenge
         {
             warn!(system_type, "PMS Modify: Challenge mismatch:");
-            return ResponseBuilder::standard(request.method_type)
-                .result_code(-1)
-                .build();
+            return Err(CryptoengError::ChallengeMismatch(system_type));
         }
         debug!(
             system_type,
@@ -255,7 +217,7 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Vec<u8
     }
 
     // Update password type if provided
-    if let Some(pwd_type) = request
+    if let Ok(pwd_type) = request
         .get_param(MethodParamType::PmsPwdTypeT)
         .and_then(|p| p.as_i32())
     {
@@ -266,7 +228,7 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Vec<u8
     match info_type {
         PmsInfoType::Password => {
             // Password modification - read from PmsInfoBufferT (208)
-            if let Some(pwd_info) = request.get_param(MethodParamType::PmsInfoBufferT) {
+            if let Ok(pwd_info) = request.get_param(MethodParamType::PmsInfoBufferT) {
                 privacy_data.password_hash = pwd_info.data().to_vec();
                 info!(
                     system_type,
@@ -274,7 +236,7 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Vec<u8
                     hash_len = pwd_info.data().len(),
                     "PMS Modify: Password hash updated:"
                 );
-            } else if let Some(pwd_info) = request.get_param(MethodParamType::PmsPwdInfoT) {
+            } else if let Ok(pwd_info) = request.get_param(MethodParamType::PmsPwdInfoT) {
                 // Fallback to old param type for compatibility
                 privacy_data.password_hash = pwd_info.data().to_vec();
                 info!(
@@ -287,28 +249,28 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Vec<u8
         }
         PmsInfoType::SecurityAnswer => {
             // Security answer modification
-            if let Some(answer_info) = request.get_param(MethodParamType::PmsInfoBufferT) {
+            if let Ok(answer_info) = request.get_param(MethodParamType::PmsInfoBufferT) {
                 debug!(
                     system_type,
                     answer_len = answer_info.data().len(),
                     "PMS Modify: Security answer updated:"
                 );
-                // Store security answer if needed (currently not implemented)
+                unimplemented!("Storing security answer not implemented")
             }
         }
         PmsInfoType::Email => {
             // Email modification
-            if let Some(email) = request.get_param(MethodParamType::PmsInfoBufferT) {
+            if let Ok(email) = request.get_param(MethodParamType::PmsInfoBufferT) {
                 privacy_data.email = String::from_utf8_lossy(email.data()).to_string();
                 info!(system_type, "PMS Modify: Email updated:");
             }
         }
         PmsInfoType::Unknown => {
             // Legacy handling: try to update based on what params are present
-            if let Some(pwd_info) = request.get_param(MethodParamType::PmsPwdInfoT) {
+            if let Ok(pwd_info) = request.get_param(MethodParamType::PmsPwdInfoT) {
                 privacy_data.password_hash = pwd_info.data().to_vec();
             }
-            if let Some(email) = request.get_param(MethodParamType::PmsHideEmailT) {
+            if let Ok(email) = request.get_param(MethodParamType::PmsHideEmailT) {
                 privacy_data.email = String::from_utf8_lossy(email.data()).to_string();
             }
             info!(
@@ -343,32 +305,26 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Vec<u8
         handler
     };
 
-    storage.save();
+    storage.save()?;
 
     // Return success with new handler
-    ResponseBuilder::standard(request.method_type)
+    Ok(ResponseBuilder::standard(request.method_type)
         .add_param(Parameter::new(MethodParamType::PmsHandlerT, new_handler))
-        .build()
+        .build())
 }
 
-fn handle_pms_delete(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
-    let system_type = request
-        .get_param(MethodParamType::PmsTypeT)
-        .and_then(|p| p.as_i32())
-        .unwrap_or(0);
+fn handle_pms_delete(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
+    let system_type = request.get_param(MethodParamType::PmsTypeT)?.as_i32()?;
 
     storage.reset_privacy_data(system_type);
-    storage.save();
+    storage.save()?;
 
     info!(system_type, "PMS Delete: Privacy data deleted:");
-    ResponseBuilder::standard(request.method_type).build()
+    Ok(ResponseBuilder::standard(request.method_type).build())
 }
 
-fn handle_pms_get_info(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
-    let system_type = request
-        .get_param(MethodParamType::PmsTypeT)
-        .and_then(|p| p.as_i32())
-        .unwrap_or(0);
+fn handle_pms_get_info(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
+    let system_type = request.get_param(MethodParamType::PmsTypeT)?.as_i32()?;
 
     let privacy_data = storage
         .get_privacy_data(system_type)
@@ -421,37 +377,32 @@ fn handle_pms_get_info(request: &StandardRequest, storage: &mut Storage) -> Vec<
         ));
     }
 
-    builder.build()
+    Ok(builder.build())
 }
 
-fn handle_pms_request_encrypt_data(request: &StandardRequest, _storage: &mut Storage) -> Vec<u8> {
-    let encrypted_data = request
-        .get_param(MethodParamType::PmsInfoBufferT)
-        .map(|p| p.data().to_vec())
-        .unwrap_or_default();
+fn handle_pms_request_encrypt_data(
+    request: &StandardRequest,
+    _storage: &mut Storage,
+) -> Result<Vec<u8>> {
+    let encrypted_data = request.get_param(MethodParamType::PmsInfoBufferT)?;
+    let data = encrypted_data.data().to_vec();
 
     info!(
-        data_len = encrypted_data.len(),
+        data_len = data.len(),
         "PMS RequestEncryptData: Returning data as-is (stub):"
     );
 
-    ResponseBuilder::standard(request.method_type)
-        .add_param(Parameter::new(
-            MethodParamType::PmsEncBufferT,
-            encrypted_data,
-        ))
-        .build()
+    Ok(ResponseBuilder::standard(request.method_type)
+        .add_param(Parameter::new(MethodParamType::PmsEncBufferT, data))
+        .build())
 }
 
-fn handle_pms_reset_all_data(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
-    let system_type = request
-        .get_param(MethodParamType::PmsTypeT)
-        .and_then(|p| p.as_i32())
-        .unwrap_or(0);
+fn handle_pms_reset_all_data(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
+    let system_type = request.get_param(MethodParamType::PmsTypeT)?.as_i32()?;
 
     storage.reset_privacy_data(system_type);
-    storage.save();
+    storage.save()?;
 
     info!(system_type, "PMS ResetAllData: All data reset:");
-    ResponseBuilder::standard(request.method_type).build()
+    Ok(ResponseBuilder::standard(request.method_type).build())
 }

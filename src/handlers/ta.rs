@@ -1,6 +1,7 @@
 use byteorder::{BigEndian, ByteOrder};
 use tracing::info;
 
+use crate::error::{CryptoengError, Result};
 use crate::method::{MethodParamType, MethodType, Parameter};
 use crate::register_handler;
 use crate::request::StandardRequest;
@@ -26,36 +27,35 @@ register_handler!(
     handle_password_verify_result
 );
 
-fn handle_store_old_password(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
+fn handle_store_old_password(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
     let user_id = request
-        .get_param(MethodParamType::PmsPwdUseridT)
-        .and_then(|p| p.as_i32())
-        .unwrap_or(0);
+        .get_param(MethodParamType::PmsPwdUseridT)?
+        .as_i32()?;
     let pwd_data = storage.get_password_data_mut(user_id);
 
-    if let Some(old_pwd_type) = request
+    if let Ok(old_pwd_type) = request
         .get_param(MethodParamType::PmsOldPwdTypeT)
         .and_then(|p| p.as_i32())
     {
         pwd_data.old_pwd_type = old_pwd_type;
     }
 
-    if let Some(old_pwd_buffer) = request.get_param(MethodParamType::PmsOldPwdBufferT) {
+    if let Ok(old_pwd_buffer) = request.get_param(MethodParamType::PmsOldPwdBufferT) {
         pwd_data.old_pwd_buffer = old_pwd_buffer.data().to_vec();
     }
 
-    if let Some(current_pwd_type) = request
+    if let Ok(current_pwd_type) = request
         .get_param(MethodParamType::PmsCurrentPwdTypeT)
         .and_then(|p| p.as_i32())
     {
         pwd_data.current_pwd_type = current_pwd_type;
     }
 
-    if let Some(current_pwd_buffer) = request.get_param(MethodParamType::PmsCurrentPwdBufferT) {
+    if let Ok(current_pwd_buffer) = request.get_param(MethodParamType::PmsCurrentPwdBufferT) {
         pwd_data.current_pwd_buffer = current_pwd_buffer.data().to_vec();
     }
 
-    if let Some(system_time) = request.get_param(MethodParamType::PmsPwdSystemTimeT) {
+    if let Ok(system_time) = request.get_param(MethodParamType::PmsPwdSystemTimeT) {
         if system_time.data().len() >= 8 {
             pwd_data.system_time = BigEndian::read_i64(system_time.data());
         }
@@ -67,24 +67,23 @@ fn handle_store_old_password(request: &StandardRequest, storage: &mut Storage) -
     let old_pwd_type = pwd_data.old_pwd_type;
     let current_pwd_type = pwd_data.current_pwd_type;
 
-    storage.save();
+    storage.save()?;
 
     info!(
         user_id,
         old_pwd_type, current_pwd_type, "TA StoreOldPassword: Password stored:"
     );
 
-    ResponseBuilder::standard(request.method_type).build()
+    Ok(ResponseBuilder::standard(request.method_type).build())
 }
 
 fn handle_retrieve_password_by_old_pwd(
     request: &StandardRequest,
     storage: &mut Storage,
-) -> Vec<u8> {
+) -> Result<Vec<u8>> {
     let user_id = request
-        .get_param(MethodParamType::PmsPwdUseridT)
-        .and_then(|p| p.as_i32())
-        .unwrap_or(0);
+        .get_param(MethodParamType::PmsPwdUseridT)?
+        .as_i32()?;
 
     if let Some(pwd_data) = storage.get_password_data(user_id) {
         info!(
@@ -94,7 +93,7 @@ fn handle_retrieve_password_by_old_pwd(
             "TA RetrievePasswordByOldPwd: Found:"
         );
 
-        ResponseBuilder::standard(request.method_type)
+        Ok(ResponseBuilder::standard(request.method_type)
             .add_param(Parameter::new(
                 MethodParamType::PmsCurrentPasswordBuffer,
                 pwd_data.current_pwd_buffer.clone(),
@@ -107,49 +106,51 @@ fn handle_retrieve_password_by_old_pwd(
                 MethodParamType::PmsVerifyOldPwdResultT,
                 0,
             ))
-            .build()
+            .build())
     } else {
         tracing::warn!(user_id, "TA RetrievePasswordByOldPwd: Not found:");
-        ResponseBuilder::standard(request.method_type)
-            .result_code(-1)
-            .build()
+        Err(CryptoengError::PasswordDataNotFound(user_id))
     }
 }
 
-fn handle_password_retrieve_validity(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
+fn handle_password_retrieve_validity(
+    request: &StandardRequest,
+    storage: &mut Storage,
+) -> Result<Vec<u8>> {
     let user_id = request
-        .get_param(MethodParamType::PmsPwdUseridT)
-        .and_then(|p| p.as_i32())
-        .unwrap_or(0);
+        .get_param(MethodParamType::PmsPwdUseridT)?
+        .as_i32()?;
     let is_valid = storage.get_password_data(user_id).is_some();
 
     info!(user_id, is_valid, "TA PasswordRetrieveValidity:");
 
-    ResponseBuilder::standard(request.method_type)
+    Ok(ResponseBuilder::standard(request.method_type)
         .add_param(Parameter::from_i32(
             MethodParamType::PmsResultValidity,
             if is_valid { 1 } else { 0 },
         ))
-        .build()
+        .build())
 }
 
-fn handle_delete_old_password(request: &StandardRequest, storage: &mut Storage) -> Vec<u8> {
+fn handle_delete_old_password(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
     let user_id = request
-        .get_param(MethodParamType::PmsPwdUseridT)
-        .and_then(|p| p.as_i32())
-        .unwrap_or(0);
+        .get_param(MethodParamType::PmsPwdUseridT)?
+        .as_i32()?;
 
     storage.delete_password_data(user_id);
-    storage.save();
+    storage.save()?;
 
     info!(user_id, "TA DeleteOldPassword: Deleted:");
-    ResponseBuilder::standard(request.method_type).build()
+    Ok(ResponseBuilder::standard(request.method_type).build())
 }
 
-fn handle_password_verify_result(request: &StandardRequest, _storage: &mut Storage) -> Vec<u8> {
+fn handle_password_verify_result(
+    request: &StandardRequest,
+    _storage: &mut Storage,
+) -> Result<Vec<u8>> {
     info!("TA PasswordVerifyResult: Returning success (stub):");
 
-    ResponseBuilder::standard(request.method_type)
+    Ok(ResponseBuilder::standard(request.method_type)
         .add_param(Parameter::from_i32(
             MethodParamType::PmsVerifyOldPwdResultT,
             0,
@@ -158,5 +159,5 @@ fn handle_password_verify_result(request: &StandardRequest, _storage: &mut Stora
             MethodParamType::PmsOldPwdTryRemainingCount,
             5,
         ))
-        .build()
+        .build())
 }

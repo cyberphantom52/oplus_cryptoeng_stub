@@ -1,3 +1,4 @@
+mod error;
 mod handlers;
 mod method;
 mod request;
@@ -7,10 +8,11 @@ mod utils;
 
 use rsbinder::*;
 use std::sync::{Arc, RwLock};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info};
 
 include!(concat!(env!("OUT_DIR"), "/cryptoeng.rs"));
 
+pub use crate::error::{CryptoengError, Result, StorageError};
 use crate::request::Request;
 use crate::response::ResponseBuilder;
 use crate::storage::Storage;
@@ -36,6 +38,17 @@ impl CryptoengService {
             storage: Arc::new(RwLock::new(Storage::load())),
         }
     }
+
+    fn handle_request(&self, request: &[u8]) -> Result<Vec<u8>> {
+        let parsed = Request::parse(request)?;
+
+        let mut storage = self.storage.write()?;
+
+        match parsed {
+            Request::Standard(req) => req.handle(&mut storage),
+            Request::Native(req) => req.handle(&mut storage),
+        }
+    }
 }
 
 impl Default for CryptoengService {
@@ -50,23 +63,18 @@ impl ICryptoeng for CryptoengService {
     fn cryptoeng_invoke_command(&self, request: &[u8]) -> rsbinder::status::Result<Vec<u8>> {
         info!(len = request.len(), "Received command:");
 
-        let response = match Request::parse(request) {
-            Some(Request::Standard(req)) => {
-                let mut storage = self.storage.write().unwrap();
-                req.handle(&mut storage)
-            }
-            Some(Request::Native(req)) => {
-                let mut storage = self.storage.write().unwrap();
-                req.handle(&mut storage)
-            }
-            None => {
-                warn!(len = request.len(), "Failed to parse request:");
+        let response = match self.handle_request(request) {
+            Ok(response) => response,
+            Err(e) => {
+                error!(error = %e, "Request handling failed:");
                 debug!(
                     hex = format!("{:02x?}", &request[..std::cmp::min(64, request.len())]),
                     "Raw request data"
                 );
-                // Return a generic error response
-                ResponseBuilder::native().result_code(-1).build()
+                // Return an error response with the appropriate code
+                ResponseBuilder::native()
+                    .result_code(e.result_code())
+                    .build()
             }
         };
 
@@ -102,9 +110,11 @@ mod tests {
         // Native command format: [cmd_id][0][0][0][data...]
         let request = vec![8u8, 0, 0, 0, 0, 0, 0, 0];
         let parsed = Request::parse(&request);
-        assert!(matches!(parsed, Some(Request::Native(_))));
-        if let Some(Request::Native(req)) = parsed {
+        assert!(parsed.is_ok());
+        if let Ok(Request::Native(req)) = parsed {
             assert_eq!(req.command, NativeCommand::WriteSecret);
+        } else {
+            panic!("Expected Native request");
         }
     }
 
@@ -126,10 +136,12 @@ mod tests {
         request.extend_from_slice(&0i32.to_be_bytes());
 
         let parsed = Request::parse(&request);
-        assert!(matches!(parsed, Some(Request::Standard(_))));
-        if let Some(Request::Standard(req)) = parsed {
+        assert!(parsed.is_ok());
+        if let Ok(Request::Standard(req)) = parsed {
             assert_eq!(req.method_type, MethodType::CeCmdPmsGetInfo);
             assert_eq!(req.params.len(), 1);
+        } else {
+            panic!("Expected Standard request");
         }
     }
 

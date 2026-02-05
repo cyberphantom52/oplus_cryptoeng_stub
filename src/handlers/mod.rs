@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use crate::error::{CryptoengError, Result};
 use crate::method::MethodType;
 use crate::request::StandardRequest;
 use crate::storage::Storage;
@@ -10,7 +11,7 @@ mod rpmb;
 mod ta;
 
 /// Handler function type for standard requests
-pub type HandlerFn = fn(&StandardRequest, &mut Storage) -> Vec<u8>;
+pub type HandlerFn = fn(&StandardRequest, &mut Storage) -> Result<Vec<u8>>;
 
 /// Entry for registering a handler with the inventory system
 pub struct HandlerEntry {
@@ -33,11 +34,14 @@ fn get_registry() -> &'static HashMap<i32, HandlerFn> {
     })
 }
 
-pub fn dispatch(request: &StandardRequest, storage: &mut Storage) -> Option<Vec<u8>> {
+pub fn dispatch(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
     let registry = get_registry();
     let code = request.method_type.code();
 
-    registry.get(&code).map(|handler| handler(request, storage))
+    match registry.get(&code) {
+        Some(handler) => handler(request, storage),
+        None => Err(CryptoengError::UnknownMethod(code)),
+    }
 }
 
 #[macro_export]
