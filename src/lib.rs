@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 include!(concat!(env!("OUT_DIR"), "/cryptoeng.rs"));
 
 use crate::request::Request;
-use crate::response::build_native_response;
+use crate::response::ResponseBuilder;
 use crate::storage::Storage;
 pub use crate::vendor::oplus::hardware::cryptoeng::ICryptoeng::BnCryptoeng;
 pub use crate::vendor::oplus::hardware::cryptoeng::ICryptoeng::ICryptoeng;
@@ -69,7 +69,7 @@ impl ICryptoeng for CryptoengService {
                     "Raw request data"
                 );
                 // Return a generic error response
-                build_native_response(-1, None)
+                ResponseBuilder::native().result_code(-1).build()
             }
         };
 
@@ -93,7 +93,7 @@ mod tests {
     use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
     use crate::{
-        method::{MethodParamType, MethodType},
+        method::{MethodParamType, MethodType, Parameter},
         response::ResponseBuilder,
     };
 
@@ -137,9 +137,9 @@ mod tests {
 
     #[test]
     fn test_response_builder() {
-        let response = ResponseBuilder::new(4005)
+        let response = ResponseBuilder::standard(4005)
             .result_code(0)
-            .add_param_i32(MethodParamType::PmsPwdTypeT, 1)
+            .add_param(Parameter::from_i32(MethodParamType::PmsPwdTypeT, 1))
             .build();
 
         // Check header
@@ -150,7 +150,10 @@ mod tests {
 
     #[test]
     fn test_native_response() {
-        let response = build_native_response(0, Some(&[1, 2, 3, 4]));
+        let response = ResponseBuilder::native()
+            .result_code(0)
+            .extra_data(vec![1, 2, 3, 4])
+            .build();
         assert_eq!(response.len(), 8);
         assert_eq!(LittleEndian::read_i32(&response[0..4]), 0);
         assert_eq!(&response[4..8], &[1, 2, 3, 4]);

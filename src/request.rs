@@ -3,8 +3,8 @@ use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
 use crate::{
-    method::{MethodParamType, MethodType, PmsInfoType},
-    response::{build_native_response, ResponseBuilder},
+    method::{MethodParamType, MethodType, Parameter, PmsInfoType},
+    response::ResponseBuilder,
     storage::Storage,
     utils::generate_random_bytes,
 };
@@ -263,7 +263,7 @@ impl StandardRequest {
                     code = self.method_code,
                     "Unknown command, returning empty success:"
                 );
-                ResponseBuilder::new(self.method_code).build()
+                ResponseBuilder::standard(self.method_code).build()
             }
         }
     }
@@ -303,8 +303,8 @@ impl StandardRequest {
         let handler = privacy_data.handler.clone();
         storage.save();
 
-        ResponseBuilder::new(self.method_code)
-            .add_param(MethodParamType::PmsHandlerT, handler)
+        ResponseBuilder::standard(self.method_code)
+            .add_param(Parameter::new(MethodParamType::PmsHandlerT, handler))
             .build()
     }
 
@@ -331,16 +331,19 @@ impl StandardRequest {
                 lock_time = privacy_data.lock_time,
                 "PMS Verify: Account is locked:"
             );
-            return ResponseBuilder::new(self.method_code)
+            return ResponseBuilder::standard(self.method_code)
                 .result_code(-1)
-                .add_param_i32(MethodParamType::PmsPwdLockTimeLeftT, privacy_data.lock_time)
+                .add_param(Parameter::from_i32(
+                    MethodParamType::PmsPwdLockTimeLeftT,
+                    privacy_data.lock_time,
+                ))
                 .build();
         }
 
         // Check if enrolled
         if !privacy_data.enrolled {
             warn!(system_type, "PMS Verify: Not enrolled:");
-            return ResponseBuilder::new(self.method_code)
+            return ResponseBuilder::standard(self.method_code)
                 .result_code(-1)
                 .build();
         }
@@ -349,7 +352,7 @@ impl StandardRequest {
             Some(buf) => buf,
             None => {
                 warn!("PMS Verify: No verify buffer provided");
-                return ResponseBuilder::new(self.method_code)
+                return ResponseBuilder::standard(self.method_code)
                     .result_code(-1)
                     .build();
             }
@@ -413,9 +416,9 @@ impl StandardRequest {
 
             storage.save();
 
-            ResponseBuilder::new(self.method_code)
-                .add_param(MethodParamType::PmsChallengeT, challenge)
-                .add_param(MethodParamType::PmsHandlerT, new_handler)
+            ResponseBuilder::standard(self.method_code)
+                .add_param(Parameter::new(MethodParamType::PmsChallengeT, challenge))
+                .add_param(Parameter::new(MethodParamType::PmsHandlerT, new_handler))
                 .build()
         } else {
             // Decrement retry count
@@ -440,9 +443,12 @@ impl StandardRequest {
             let retry_count = privacy_data.retry_count;
             storage.save();
 
-            ResponseBuilder::new(self.method_code)
+            ResponseBuilder::standard(self.method_code)
                 .result_code(-1)
-                .add_param_i32(MethodParamType::PmsPwdRetryCountLeftT, retry_count)
+                .add_param(Parameter::from_i32(
+                    MethodParamType::PmsPwdRetryCountLeftT,
+                    retry_count,
+                ))
                 .build()
         }
     }
@@ -467,7 +473,7 @@ impl StandardRequest {
                 && *challenge != privacy_data.pending_challenge
             {
                 warn!(system_type, "PMS Modify: Challenge mismatch:");
-                return ResponseBuilder::new(self.method_code)
+                return ResponseBuilder::standard(self.method_code)
                     .result_code(-1)
                     .build();
             }
@@ -567,8 +573,8 @@ impl StandardRequest {
         storage.save();
 
         // Return success with new handler
-        ResponseBuilder::new(self.method_code)
-            .add_param(MethodParamType::PmsHandlerT, new_handler)
+        ResponseBuilder::standard(self.method_code)
+            .add_param(Parameter::new(MethodParamType::PmsHandlerT, new_handler))
             .build()
     }
 
@@ -579,7 +585,7 @@ impl StandardRequest {
         storage.save();
 
         info!(system_type, "PMS Delete: Privacy data deleted:");
-        ResponseBuilder::new(self.method_code).build()
+        ResponseBuilder::standard(self.method_code).build()
     }
 
     fn handle_pms_get_info(&self, storage: &mut Storage) -> Vec<u8> {
@@ -600,28 +606,40 @@ impl StandardRequest {
             "PMS GetInfo:"
         );
 
-        let mut builder = ResponseBuilder::new(self.method_code)
-            .add_param_i32(MethodParamType::PmsPwdTypeT, privacy_data.password_type)
-            .add_param_i32(
+        let mut builder = ResponseBuilder::standard(self.method_code)
+            .add_param(Parameter::from_i32(
+                MethodParamType::PmsPwdTypeT,
+                privacy_data.password_type,
+            ))
+            .add_param(Parameter::from_i32(
                 MethodParamType::PmsPwdRetryCountLeftT,
                 privacy_data.retry_count,
-            )
-            .add_param_i32(MethodParamType::PmsPwdLockTimeLeftT, privacy_data.lock_time)
-            .add_param_i32(
+            ))
+            .add_param(Parameter::from_i32(
+                MethodParamType::PmsPwdLockTimeLeftT,
+                privacy_data.lock_time,
+            ))
+            .add_param(Parameter::from_i32(
                 MethodParamType::PmsSecureQuestionRetryCountLeftT,
                 privacy_data.secure_question_retry_count,
-            )
-            .add_param_i32(
+            ))
+            .add_param(Parameter::from_i32(
                 MethodParamType::PmsSecureQuestionLockTimeLeftT,
                 privacy_data.secure_question_lock_time,
-            );
+            ));
 
         if !privacy_data.handler.is_empty() {
-            builder = builder.add_param(MethodParamType::PmsHandlerT, privacy_data.handler.clone());
+            builder = builder.add_param(Parameter::new(
+                MethodParamType::PmsHandlerT,
+                privacy_data.handler.clone(),
+            ));
         }
 
         if !privacy_data.email.is_empty() {
-            builder = builder.add_param_string(MethodParamType::PmsHideEmailT, &privacy_data.email);
+            builder = builder.add_param(Parameter::from_str(
+                MethodParamType::PmsHideEmailT,
+                &privacy_data.email,
+            ));
         }
 
         builder.build()
@@ -639,8 +657,11 @@ impl StandardRequest {
             "PMS RequestEncryptData: Returning data as-is (stub):"
         );
 
-        ResponseBuilder::new(self.method_code)
-            .add_param(MethodParamType::PmsEncBufferT, encrypted_data)
+        ResponseBuilder::standard(self.method_code)
+            .add_param(Parameter::new(
+                MethodParamType::PmsEncBufferT,
+                encrypted_data,
+            ))
             .build()
     }
 
@@ -651,7 +672,7 @@ impl StandardRequest {
         storage.save();
 
         info!(system_type, "PMS ResetAllData: All data reset:");
-        ResponseBuilder::new(self.method_code).build()
+        ResponseBuilder::standard(self.method_code).build()
     }
 
     fn handle_set_lock_screen_pwd_type(&self, storage: &mut Storage) -> Vec<u8> {
@@ -669,7 +690,7 @@ impl StandardRequest {
             user_id,
             pwd_type, "SetLockScreenPwdType: Password type set:"
         );
-        ResponseBuilder::new(self.method_code).build()
+        ResponseBuilder::standard(self.method_code).build()
     }
 
     fn handle_get_rpmb_value(&self, storage: &mut Storage) -> Vec<u8> {
@@ -687,8 +708,8 @@ impl StandardRequest {
             "GetRpmbValue:"
         );
 
-        ResponseBuilder::new(self.method_code)
-            .add_param(MethodParamType::PmsCommonBuffer1T, value)
+        ResponseBuilder::standard(self.method_code)
+            .add_param(Parameter::new(MethodParamType::PmsCommonBuffer1T, value))
             .build()
     }
 
@@ -733,7 +754,7 @@ impl StandardRequest {
             old_pwd_type, current_pwd_type, "TA StoreOldPassword: Password stored:"
         );
 
-        ResponseBuilder::new(self.method_code).build()
+        ResponseBuilder::standard(self.method_code).build()
     }
 
     fn handle_retrieve_password_by_old_pwd(&self, storage: &mut Storage) -> Vec<u8> {
@@ -749,20 +770,23 @@ impl StandardRequest {
                 "TA RetrievePasswordByOldPwd: Found:"
             );
 
-            ResponseBuilder::new(self.method_code)
-                .add_param(
+            ResponseBuilder::standard(self.method_code)
+                .add_param(Parameter::new(
                     MethodParamType::PmsCurrentPasswordBuffer,
                     pwd_data.current_pwd_buffer.clone(),
-                )
-                .add_param_i32(
+                ))
+                .add_param(Parameter::from_i32(
                     MethodParamType::PmsCurrentPasswordType,
                     pwd_data.current_pwd_type,
-                )
-                .add_param_i32(MethodParamType::PmsVerifyOldPwdResultT, 0)
+                ))
+                .add_param(Parameter::from_i32(
+                    MethodParamType::PmsVerifyOldPwdResultT,
+                    0,
+                ))
                 .build()
         } else {
             warn!(user_id, "TA RetrievePasswordByOldPwd: Not found:");
-            ResponseBuilder::new(self.method_code)
+            ResponseBuilder::standard(self.method_code)
                 .result_code(-1)
                 .build()
         }
@@ -776,11 +800,11 @@ impl StandardRequest {
 
         info!(user_id, is_valid, "TA PasswordRetrieveValidity:");
 
-        ResponseBuilder::new(self.method_code)
-            .add_param_i32(
+        ResponseBuilder::standard(self.method_code)
+            .add_param(Parameter::from_i32(
                 MethodParamType::PmsResultValidity,
                 if is_valid { 1 } else { 0 },
-            )
+            ))
             .build()
     }
 
@@ -793,15 +817,21 @@ impl StandardRequest {
         storage.save();
 
         info!(user_id, "TA DeleteOldPassword: Deleted:");
-        ResponseBuilder::new(self.method_code).build()
+        ResponseBuilder::standard(self.method_code).build()
     }
 
     fn handle_password_verify_result(&self, _storage: &mut Storage) -> Vec<u8> {
         info!("TA PasswordVerifyResult: Returning success (stub):");
 
-        ResponseBuilder::new(self.method_code)
-            .add_param_i32(MethodParamType::PmsVerifyOldPwdResultT, 0)
-            .add_param_i32(MethodParamType::PmsOldPwdTryRemainingCount, 5)
+        ResponseBuilder::standard(self.method_code)
+            .add_param(Parameter::from_i32(
+                MethodParamType::PmsVerifyOldPwdResultT,
+                0,
+            ))
+            .add_param(Parameter::from_i32(
+                MethodParamType::PmsOldPwdTryRemainingCount,
+                5,
+            ))
             .build()
     }
 
@@ -857,7 +887,7 @@ impl NativeRequest {
             NativeCommand::PresetDataDec => self.handle_preset_data_dec(storage),
             NativeCommand::Unknown => {
                 warn!(cmd_id = self.cmd_id, "Unknown native command:");
-                build_native_response(0, None)
+                ResponseBuilder::native().build()
             }
         }
     }
@@ -869,7 +899,7 @@ impl NativeRequest {
                 data_len = self.data.len(),
                 "WriteSecret: Buffer too short for secret length:"
             );
-            return build_native_response(-1, None);
+            return ResponseBuilder::native().result_code(-1).build();
         }
 
         let secret_length = LittleEndian::read_i32(&self.data[0..4]) as usize;
@@ -881,7 +911,7 @@ impl NativeRequest {
                 expected = offset + secret_length,
                 "WriteSecret: Buffer too short for secret data:"
             );
-            return build_native_response(-1, None);
+            return ResponseBuilder::native().result_code(-1).build();
         }
 
         let secret = &self.data[offset..offset + secret_length];
@@ -893,7 +923,7 @@ impl NativeRequest {
                 expected = offset + 4,
                 "WriteSecret: Buffer too short for token length:"
             );
-            return build_native_response(-1, None);
+            return ResponseBuilder::native().result_code(-1).build();
         }
 
         let token_length = LittleEndian::read_i32(&self.data[offset..offset + 4]) as usize;
@@ -905,7 +935,7 @@ impl NativeRequest {
                 expected = offset + token_length,
                 "WriteSecret: Buffer too short for token data:"
             );
-            return build_native_response(-1, None);
+            return ResponseBuilder::native().result_code(-1).build();
         }
 
         info!(
@@ -917,7 +947,7 @@ impl NativeRequest {
         storage.store_secret(secret_length as i32, secret.to_vec());
         storage.save();
 
-        build_native_response(0, None)
+        ResponseBuilder::native().build()
     }
 
     fn handle_preset_data_dec(&self, _storage: &mut Storage) -> Vec<u8> {
@@ -927,7 +957,7 @@ impl NativeRequest {
                 data_len = self.data.len(),
                 "PresetDataDec: Buffer too short for aliBuf length:"
             );
-            return build_native_response(-1, None);
+            return ResponseBuilder::native().result_code(-1).build();
         }
 
         let ali_buf_len = LittleEndian::read_i32(&self.data[0..4]) as usize;
@@ -939,7 +969,7 @@ impl NativeRequest {
                 expected = offset + ali_buf_len,
                 "PresetDataDec: Buffer too short for aliBuf data:"
             );
-            return build_native_response(-1, None);
+            return ResponseBuilder::native().result_code(-1).build();
         }
 
         let ali_buf = &self.data[offset..offset + ali_buf_len];
@@ -951,7 +981,7 @@ impl NativeRequest {
                 expected = offset + 4,
                 "PresetDataDec: Buffer too short for enc length:"
             );
-            return build_native_response(-1, None);
+            return ResponseBuilder::native().result_code(-1).build();
         }
 
         let enc_len = LittleEndian::read_i32(&self.data[offset..offset + 4]) as usize;
@@ -963,7 +993,7 @@ impl NativeRequest {
                 expected = offset + enc_len,
                 "PresetDataDec: Buffer too short for enc data:"
             );
-            return build_native_response(-1, None);
+            return ResponseBuilder::native().result_code(-1).build();
         }
 
         let enc_data = &self.data[offset..offset + enc_len];
@@ -974,6 +1004,8 @@ impl NativeRequest {
             "PresetDataDec: Returning data as-is (stub):"
         );
 
-        build_native_response(0, Some(enc_data))
+        ResponseBuilder::native()
+            .extra_data(enc_data.to_vec())
+            .build()
     }
 }

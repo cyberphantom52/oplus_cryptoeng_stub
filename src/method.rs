@@ -1,4 +1,51 @@
+use byteorder::{BigEndian, ByteOrder};
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Parameter {
+    ty: MethodParamType,
+    data: Vec<u8>,
+}
+
+impl Parameter {
+    pub fn new(ty: MethodParamType, data: Vec<u8>) -> Self {
+        Self { ty, data }
+    }
+
+    /// Create a parameter from an i32 value (big-endian)
+    pub fn from_i32(ty: MethodParamType, value: i32) -> Self {
+        let mut data = vec![0u8; 4];
+        BigEndian::write_i32(&mut data, value);
+        Self { ty, data }
+    }
+
+    /// Create a parameter from a string value
+    pub fn from_str(ty: MethodParamType, value: &str) -> Self {
+        Self {
+            ty,
+            data: value.as_bytes().to_vec(),
+        }
+    }
+
+    /// Serialize the parameter to big-endian bytes (type + length + data)
+    pub fn to_be_bytes(&self) -> Vec<u8> {
+        let mut result = Vec::with_capacity(8 + self.data.len());
+        let mut buf = [0u8; 4];
+
+        // Param type (4 bytes, big-endian)
+        BigEndian::write_i32(&mut buf, self.ty as i32);
+        result.extend_from_slice(&buf);
+
+        // Param length (4 bytes, big-endian)
+        BigEndian::write_i32(&mut buf, self.data.len() as i32);
+        result.extend_from_slice(&buf);
+
+        // Param data
+        result.extend_from_slice(&self.data);
+
+        result
+    }
+}
 
 /// Info type for PMS modify operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

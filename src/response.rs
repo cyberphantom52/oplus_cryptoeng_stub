@@ -1,51 +1,53 @@
+use std::marker::PhantomData;
+
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
-use crate::method::MethodParamType;
+use crate::method::Parameter;
 
-/// Builder for standard responses
-pub struct ResponseBuilder {
+/// Marker type for standard response format (cmdId > 100)
+pub struct Standard;
+
+/// Marker type for native response format (cmdId <= 100)
+pub struct Native;
+
+pub struct ResponseBuilder<T> {
     method_code: i32,
     result_code: i32,
-    params: Vec<(i32, Vec<u8>)>,
+    parameters: Vec<Parameter>,
+    extra_data: Option<Vec<u8>>,
+    _marker: PhantomData<T>,
 }
 
-impl ResponseBuilder {
-    pub fn new(method_code: i32) -> Self {
+impl ResponseBuilder<Standard> {
+    /// Create a new standard response builder
+    pub fn standard(method_code: i32) -> Self {
         Self {
             method_code,
             result_code: 0,
-            params: Vec::new(),
+            parameters: Vec::new(),
+            extra_data: None,
+            _marker: PhantomData,
         }
     }
 
+    /// Set the result code
     pub fn result_code(mut self, code: i32) -> Self {
         self.result_code = code;
         self
     }
 
-    pub fn add_param(mut self, param_type: MethodParamType, data: Vec<u8>) -> Self {
-        self.params.push((param_type as i32, data));
+    /// Add a parameter
+    pub fn add_param(mut self, param: Parameter) -> Self {
+        self.parameters.push(param);
         self
     }
 
-    pub fn add_param_i32(mut self, param_type: MethodParamType, value: i32) -> Self {
-        let mut data = vec![0u8; 4];
-        BigEndian::write_i32(&mut data, value);
-        self.params.push((param_type as i32, data));
-        self
-    }
-
-    pub fn add_param_string(mut self, param_type: MethodParamType, value: &str) -> Self {
-        self.params
-            .push((param_type as i32, value.as_bytes().to_vec()));
-        self
-    }
-
+    /// Build the standard response bytes
     pub fn build(self) -> Vec<u8> {
         let mut result = Vec::new();
+        let mut buf = [0u8; 4];
 
         // Method type (4 bytes)
-        let mut buf = [0u8; 4];
         BigEndian::write_i32(&mut buf, self.method_code);
         result.extend_from_slice(&buf);
 
@@ -54,33 +56,51 @@ impl ResponseBuilder {
         result.extend_from_slice(&buf);
 
         // Param count (4 bytes)
-        BigEndian::write_i32(&mut buf, self.params.len() as i32);
+        BigEndian::write_i32(&mut buf, self.parameters.len() as i32);
         result.extend_from_slice(&buf);
 
         // Params
-        for (param_type, data) in self.params {
-            // Param type (4 bytes)
-            BigEndian::write_i32(&mut buf, param_type);
-            result.extend_from_slice(&buf);
-
-            // Param length (4 bytes)
-            BigEndian::write_i32(&mut buf, data.len() as i32);
-            result.extend_from_slice(&buf);
-
-            // Param data
-            result.extend_from_slice(&data);
+        for param in self.parameters {
+            result.extend_from_slice(&param.to_be_bytes());
         }
 
         result
     }
 }
 
-/// Build a native response (for cmdId <= 100)
-pub fn build_native_response(result_code: i32, extra_data: Option<&[u8]>) -> Vec<u8> {
-    let mut result = vec![0u8; 4];
-    LittleEndian::write_i32(&mut result, result_code);
-    if let Some(data) = extra_data {
-        result.extend_from_slice(data);
+impl ResponseBuilder<Native> {
+    /// Create a new native response builder
+    pub fn native() -> Self {
+        Self {
+            method_code: 0,
+            result_code: 0,
+            parameters: Vec::new(),
+            extra_data: None,
+            _marker: PhantomData,
+        }
     }
-    result
+
+    /// Set the result code
+    pub fn result_code(mut self, code: i32) -> Self {
+        self.result_code = code;
+        self
+    }
+
+    /// Set extra data
+    pub fn extra_data(mut self, data: Vec<u8>) -> Self {
+        self.extra_data = Some(data);
+        self
+    }
+
+    /// Build the native response bytes
+    pub fn build(self) -> Vec<u8> {
+        let mut result = vec![0u8; 4];
+        LittleEndian::write_i32(&mut result, self.result_code);
+
+        if let Some(data) = self.extra_data {
+            result.extend_from_slice(&data);
+        }
+
+        result
+    }
 }
