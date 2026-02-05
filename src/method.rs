@@ -47,6 +47,108 @@ impl Parameter {
     }
 }
 
+impl std::fmt::Display for Parameter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.ty {
+            // Integer parameters - show as decimal
+            MethodParamType::PmsTypeT
+            | MethodParamType::PmsPwdTypeT
+            | MethodParamType::PmsVerifyTypeT
+            | MethodParamType::PmsPwdRetryCountLeftT
+            | MethodParamType::PmsPwdLockTimeLeftT
+            | MethodParamType::PmsSecureQuestionRetryCountLeftT
+            | MethodParamType::PmsSecureQuestionLockTimeLeftT
+            | MethodParamType::PmsLatestSecureRulesT
+            | MethodParamType::PmsPwdUseridT
+            | MethodParamType::PmsOldPwdTypeT
+            | MethodParamType::PmsOldPwdLengthT
+            | MethodParamType::PmsCurrentPwdTypeT
+            | MethodParamType::PmsCurrentPwdLenT
+            | MethodParamType::PmsVerifyOldPwdResultT
+            | MethodParamType::PmsOldPwdTryRemainingCount
+            | MethodParamType::PmsOldPwdTryRemainingTime
+            | MethodParamType::PmsResultValidity => {
+                if self.data.len() >= 4 {
+                    write!(f, "{}", BigEndian::read_i32(&self.data))
+                } else {
+                    write!(f, "<invalid: {} bytes>", self.data.len())
+                }
+            }
+            // Boolean-like parameters
+            MethodParamType::PmsHideEmailT => {
+                if self.data.len() >= 4 {
+                    let val = BigEndian::read_i32(&self.data);
+                    write!(f, "{}", val != 0)
+                } else {
+                    write!(f, "<invalid: {} bytes>", self.data.len())
+                }
+            }
+
+            // String parameters
+            MethodParamType::PmsAccountName => write!(f, "{}", String::from_utf8_lossy(&self.data)),
+
+            // Binary/hash parameters - show as hex with truncation
+            MethodParamType::PmsVerifyBufferT
+            | MethodParamType::PmsPwdInfoT
+            | MethodParamType::PmsSecureInfoBufferT
+            | MethodParamType::PmsChallengeT
+            | MethodParamType::PmsHandlerT
+            | MethodParamType::PmsEncBufferT
+            | MethodParamType::PmsOldPwdBufferT
+            | MethodParamType::PmsCurrentPwdBufferT
+            | MethodParamType::PmsCurrentPasswordBuffer => {
+                if self.data.len() <= 16 {
+                    write!(
+                        f,
+                        "[{}]",
+                        self.data
+                            .iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )
+                } else {
+                    write!(
+                        f,
+                        "[{} ... +{} more]",
+                        self.data[..8]
+                            .iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                        self.data.len() - 8
+                    )
+                }
+            }
+            _ => {
+                if self.data.len() <= 8 {
+                    write!(
+                        f,
+                        "{} bytes: [{}]",
+                        self.data.len(),
+                        self.data
+                            .iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )
+                } else {
+                    write!(
+                        f,
+                        "{} bytes: [{} ...]",
+                        self.data.len(),
+                        self.data[..4]
+                            .iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )
+                }
+            }
+        }
+    }
+}
+
 /// Info type for PMS modify operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]

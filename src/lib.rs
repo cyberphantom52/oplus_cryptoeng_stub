@@ -1,3 +1,4 @@
+mod handlers;
 mod method;
 mod request;
 mod response;
