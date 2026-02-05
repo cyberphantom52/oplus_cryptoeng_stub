@@ -94,6 +94,7 @@ mod tests {
 
     use crate::{
         method::{MethodParamType, MethodType, Parameter},
+        request::NativeCommand,
         response::ResponseBuilder,
     };
 
@@ -106,7 +107,7 @@ mod tests {
         let parsed = Request::parse(&request);
         assert!(matches!(parsed, Some(Request::Native(_))));
         if let Some(Request::Native(req)) = parsed {
-            assert_eq!(req.cmd_id, 8);
+            assert_eq!(req.command, NativeCommand::WriteSecret);
         }
     }
 
@@ -137,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_response_builder() {
-        let response = ResponseBuilder::standard(4005)
+        let response = ResponseBuilder::standard(MethodType::CeCmdPmsGetInfo)
             .result_code(0)
             .add_param(Parameter::from_i32(MethodParamType::PmsPwdTypeT, 1))
             .build();

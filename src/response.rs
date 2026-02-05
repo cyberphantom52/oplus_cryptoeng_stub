@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
-use crate::method::Parameter;
+use crate::method::{MethodType, Parameter};
 
 /// Marker type for standard response format (cmdId > 100)
 pub struct Standard;
@@ -11,7 +11,7 @@ pub struct Standard;
 pub struct Native;
 
 pub struct ResponseBuilder<T> {
-    method_code: i32,
+    method_type: Option<MethodType>,
     result_code: i32,
     parameters: Vec<Parameter>,
     extra_data: Option<Vec<u8>>,
@@ -20,9 +20,9 @@ pub struct ResponseBuilder<T> {
 
 impl ResponseBuilder<Standard> {
     /// Create a new standard response builder
-    pub fn standard(method_code: i32) -> Self {
+    pub fn standard(method_type: MethodType) -> Self {
         Self {
-            method_code,
+            method_type: Some(method_type),
             result_code: 0,
             parameters: Vec::new(),
             extra_data: None,
@@ -48,8 +48,7 @@ impl ResponseBuilder<Standard> {
         let mut buf = [0u8; 4];
 
         // Method type (4 bytes)
-        BigEndian::write_i32(&mut buf, self.method_code);
-        result.extend_from_slice(&buf);
+        result.extend_from_slice(&self.method_type.unwrap().to_be_bytes());
 
         // Result code (4 bytes)
         BigEndian::write_i32(&mut buf, self.result_code);
@@ -72,7 +71,7 @@ impl ResponseBuilder<Native> {
     /// Create a new native response builder
     pub fn native() -> Self {
         Self {
-            method_code: 0,
+            method_type: None,
             result_code: 0,
             parameters: Vec::new(),
             extra_data: None,

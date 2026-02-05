@@ -24,98 +24,15 @@ impl Request {
             return None;
         }
 
-        // If the first byte is a small number and high bytes are 0, it's likely a native command
-        if data[1] == 0 && data[2] == 0 && data[3] == 0 && data[0] <= 100 {
-            let cmd_id = data[0];
-            let cmd = NativeCommand::from(cmd_id);
-            debug!(cmd_id, cmd = ?cmd, "Detected native command:");
-            return Some(Request::Native(NativeRequest {
-                cmd_id,
-                data: data[4..].to_vec(),
-            }));
+        // If the first byte is a small number and high bytes are 0, it's a native command
+        if data[0] <= 100 && data[1..=3] == [0, 0, 0] {
+            let request = NativeRequest::from(data);
+            debug!(command = ?request.command, "Detected native command:");
+            return Some(Request::Native(request));
         }
 
         // Otherwise, parse as standard request (big-endian)
-        Self::parse_standard_request(data).map(Request::Standard)
-    }
-
-    /// Parse a standard request (cmdId > 100)
-    fn parse_standard_request(buffer: &[u8]) -> Option<StandardRequest> {
-        if buffer.len() < 12 {
-            warn!(
-                len = buffer.len(),
-                min = 12,
-                "Standard request buffer too short:"
-            );
-            return None;
-        }
-
-        let method_code = BigEndian::read_i32(&buffer[0..4]);
-        let buffer_size = BigEndian::read_i32(&buffer[4..8]);
-        let param_count = BigEndian::read_i32(&buffer[8..12]);
-        let method_type = MethodType::from(method_code);
-
-        debug!(
-            method = ?method_type,
-            code = method_code,
-            buffer_size,
-            param_count,
-            "Parsing standard request:"
-        );
-
-        let mut params = HashMap::new();
-        let mut offset = 12;
-
-        for i in 0..param_count {
-            if offset + 8 > buffer.len() {
-                warn!(
-                    param_index = i,
-                    offset,
-                    buffer_len = buffer.len(),
-                    "Buffer too short for param header:"
-                );
-                break;
-            }
-
-            let param_type_code = BigEndian::read_i32(&buffer[offset..offset + 4]);
-            let param_len = BigEndian::read_i32(&buffer[offset + 4..offset + 8]) as usize;
-            offset += 8;
-
-            if offset + param_len > buffer.len() {
-                warn!(
-                    param_index = i,
-                    param_len,
-                    offset,
-                    buffer_len = buffer.len(),
-                    "Buffer too short for param data:"
-                );
-                break;
-            }
-
-            let param_data = buffer[offset..offset + param_len].to_vec();
-            offset += param_len;
-
-            let param_type = MethodParamType::from(param_type_code);
-            let value_preview = format_param_value(&param_type, &param_data);
-
-            debug!(
-                param_index = i,
-                param_type = ?param_type,
-                len = param_len,
-                value = %value_preview,
-                "  Param:"
-            );
-
-            params.insert(param_type, param_data);
-        }
-
-        Some(StandardRequest {
-            method_type,
-            method_code,
-            buffer_size,
-            param_count,
-            params,
-        })
+        StandardRequest::try_from(data).ok().map(Request::Standard)
     }
 }
 
@@ -225,17 +142,96 @@ fn format_param_value(param_type: &MethodParamType, data: &[u8]) -> String {
 #[derive(Debug, Clone)]
 pub struct StandardRequest {
     pub method_type: MethodType,
-    pub method_code: i32,
     pub buffer_size: i32,
     pub param_count: i32,
     pub params: HashMap<MethodParamType, Vec<u8>>,
+}
+
+impl TryFrom<&[u8]> for StandardRequest {
+    type Error = &'static str;
+
+    fn try_from(buffer: &[u8]) -> Result<Self, Self::Error> {
+        if buffer.len() < 12 {
+            warn!(
+                len = buffer.len(),
+                min = 12,
+                "Standard request buffer too short:"
+            );
+            return Err("Buffer too short");
+        }
+
+        let method_type = MethodType::from(BigEndian::read_i32(&buffer[0..4]));
+        let buffer_size = BigEndian::read_i32(&buffer[4..8]);
+        let param_count = BigEndian::read_i32(&buffer[8..12]);
+
+        debug!(
+            method = ?method_type,
+            code = method_type.code(),
+            buffer_size,
+            param_count,
+            "Parsing standard request:"
+        );
+
+        let mut params = HashMap::new();
+        let mut offset = 12;
+
+        for i in 0..param_count {
+            if offset + 8 > buffer.len() {
+                warn!(
+                    param_index = i,
+                    offset,
+                    buffer_len = buffer.len(),
+                    "Buffer too short for param header:"
+                );
+                break;
+            }
+
+            let param_type_code = BigEndian::read_i32(&buffer[offset..offset + 4]);
+            let param_len = BigEndian::read_i32(&buffer[offset + 4..offset + 8]) as usize;
+            offset += 8;
+
+            if offset + param_len > buffer.len() {
+                warn!(
+                    param_index = i,
+                    param_len,
+                    offset,
+                    buffer_len = buffer.len(),
+                    "Buffer too short for param data:"
+                );
+                break;
+            }
+
+            let param_data = buffer[offset..offset + param_len].to_vec();
+            offset += param_len;
+
+            let param_type = MethodParamType::from(param_type_code);
+            let value_preview = format_param_value(&param_type, &param_data);
+
+            debug!(
+                param_index = i,
+                param_type = ?param_type,
+                len = param_len,
+                value = %value_preview,
+                "  Param:"
+            );
+
+            params.insert(param_type, param_data);
+        }
+
+        Ok(StandardRequest {
+            method_type,
+            buffer_size,
+            param_count,
+            params,
+        })
+    }
 }
 
 impl StandardRequest {
     pub fn handle(&self, storage: &mut Storage) -> Vec<u8> {
         info!(
             command = ?self.method_type,
-            code = self.method_code,
+            code = self.method_type.code(),
             "Handling command:"
         );
         match self.method_type {
@@ -257,13 +253,14 @@ impl StandardRequest {
             }
             MethodType::TaCmdDeleteOldPassword => self.handle_delete_old_password(storage),
             MethodType::TaCmdPasswordVerifyResult => self.handle_password_verify_result(storage),
-            _ => {
+            MethodType::CeCmdPmsFirstCmd | MethodType::CeCmdPmsMaxCmd | MethodType::Unknown(_) => {
+                let code = self.method_type.code();
                 warn!(
                     command = ?self.method_type,
-                    code = self.method_code,
+                    code,
                     "Unknown command, returning empty success:"
                 );
-                ResponseBuilder::standard(self.method_code).build()
+                ResponseBuilder::standard(self.method_type).build()
             }
         }
     }
@@ -303,7 +300,7 @@ impl StandardRequest {
         let handler = privacy_data.handler.clone();
         storage.save();
 
-        ResponseBuilder::standard(self.method_code)
+        ResponseBuilder::standard(self.method_type)
             .add_param(Parameter::new(MethodParamType::PmsHandlerT, handler))
             .build()
     }
@@ -331,7 +328,7 @@ impl StandardRequest {
                 lock_time = privacy_data.lock_time,
                 "PMS Verify: Account is locked:"
             );
-            return ResponseBuilder::standard(self.method_code)
+            return ResponseBuilder::standard(self.method_type)
                 .result_code(-1)
                 .add_param(Parameter::from_i32(
                     MethodParamType::PmsPwdLockTimeLeftT,
@@ -343,7 +340,7 @@ impl StandardRequest {
         // Check if enrolled
         if !privacy_data.enrolled {
             warn!(system_type, "PMS Verify: Not enrolled:");
-            return ResponseBuilder::standard(self.method_code)
+            return ResponseBuilder::standard(self.method_type)
                 .result_code(-1)
                 .build();
         }
@@ -352,7 +349,7 @@ impl StandardRequest {
             Some(buf) => buf,
             None => {
                 warn!("PMS Verify: No verify buffer provided");
-                return ResponseBuilder::standard(self.method_code)
+                return ResponseBuilder::standard(self.method_type)
                     .result_code(-1)
                     .build();
             }
@@ -416,7 +413,7 @@ impl StandardRequest {
 
             storage.save();
 
-            ResponseBuilder::standard(self.method_code)
+            ResponseBuilder::standard(self.method_type)
                 .add_param(Parameter::new(MethodParamType::PmsChallengeT, challenge))
                 .add_param(Parameter::new(MethodParamType::PmsHandlerT, new_handler))
                 .build()
@@ -443,7 +440,7 @@ impl StandardRequest {
             let retry_count = privacy_data.retry_count;
             storage.save();
 
-            ResponseBuilder::standard(self.method_code)
+            ResponseBuilder::standard(self.method_type)
                 .result_code(-1)
                 .add_param(Parameter::from_i32(
                     MethodParamType::PmsPwdRetryCountLeftT,
@@ -473,7 +470,7 @@ impl StandardRequest {
                 && *challenge != privacy_data.pending_challenge
             {
                 warn!(system_type, "PMS Modify: Challenge mismatch:");
-                return ResponseBuilder::standard(self.method_code)
+                return ResponseBuilder::standard(self.method_type)
                     .result_code(-1)
                     .build();
             }
@@ -573,7 +570,7 @@ impl StandardRequest {
         storage.save();
 
         // Return success with new handler
-        ResponseBuilder::standard(self.method_code)
+        ResponseBuilder::standard(self.method_type)
             .add_param(Parameter::new(MethodParamType::PmsHandlerT, new_handler))
             .build()
     }
@@ -585,7 +582,7 @@ impl StandardRequest {
         storage.save();
 
         info!(system_type, "PMS Delete: Privacy data deleted:");
-        ResponseBuilder::standard(self.method_code).build()
+        ResponseBuilder::standard(self.method_type).build()
     }
 
     fn handle_pms_get_info(&self, storage: &mut Storage) -> Vec<u8> {
@@ -606,7 +603,7 @@ impl StandardRequest {
             "PMS GetInfo:"
         );
 
-        let mut builder = ResponseBuilder::standard(self.method_code)
+        let mut builder = ResponseBuilder::standard(self.method_type)
             .add_param(Parameter::from_i32(
                 MethodParamType::PmsPwdTypeT,
                 privacy_data.password_type,
@@ -657,7 +654,7 @@ impl StandardRequest {
             "PMS RequestEncryptData: Returning data as-is (stub):"
         );
 
-        ResponseBuilder::standard(self.method_code)
+        ResponseBuilder::standard(self.method_type)
             .add_param(Parameter::new(
                 MethodParamType::PmsEncBufferT,
                 encrypted_data,
@@ -672,7 +669,7 @@ impl StandardRequest {
         storage.save();
 
         info!(system_type, "PMS ResetAllData: All data reset:");
-        ResponseBuilder::standard(self.method_code).build()
+        ResponseBuilder::standard(self.method_type).build()
     }
 
     fn handle_set_lock_screen_pwd_type(&self, storage: &mut Storage) -> Vec<u8> {
@@ -690,7 +687,7 @@ impl StandardRequest {
             user_id,
             pwd_type, "SetLockScreenPwdType: Password type set:"
         );
-        ResponseBuilder::standard(self.method_code).build()
+        ResponseBuilder::standard(self.method_type).build()
     }
 
     fn handle_get_rpmb_value(&self, storage: &mut Storage) -> Vec<u8> {
@@ -708,7 +705,7 @@ impl StandardRequest {
             "GetRpmbValue:"
         );
 
-        ResponseBuilder::standard(self.method_code)
+        ResponseBuilder::standard(self.method_type)
             .add_param(Parameter::new(MethodParamType::PmsCommonBuffer1T, value))
             .build()
     }
@@ -754,7 +751,7 @@ impl StandardRequest {
             old_pwd_type, current_pwd_type, "TA StoreOldPassword: Password stored:"
         );
 
-        ResponseBuilder::standard(self.method_code).build()
+        ResponseBuilder::standard(self.method_type).build()
     }
 
     fn handle_retrieve_password_by_old_pwd(&self, storage: &mut Storage) -> Vec<u8> {
@@ -770,7 +767,7 @@ impl StandardRequest {
                 "TA RetrievePasswordByOldPwd: Found:"
             );
 
-            ResponseBuilder::standard(self.method_code)
+            ResponseBuilder::standard(self.method_type)
                 .add_param(Parameter::new(
                     MethodParamType::PmsCurrentPasswordBuffer,
                     pwd_data.current_pwd_buffer.clone(),
@@ -786,7 +783,7 @@ impl StandardRequest {
                 .build()
         } else {
             warn!(user_id, "TA RetrievePasswordByOldPwd: Not found:");
-            ResponseBuilder::standard(self.method_code)
+            ResponseBuilder::standard(self.method_type)
                 .result_code(-1)
                 .build()
         }
@@ -800,7 +797,7 @@ impl StandardRequest {
 
         info!(user_id, is_valid, "TA PasswordRetrieveValidity:");
 
-        ResponseBuilder::standard(self.method_code)
+        ResponseBuilder::standard(self.method_type)
             .add_param(Parameter::from_i32(
                 MethodParamType::PmsResultValidity,
                 if is_valid { 1 } else { 0 },
@@ -817,13 +814,13 @@ impl StandardRequest {
         storage.save();
 
         info!(user_id, "TA DeleteOldPassword: Deleted:");
-        ResponseBuilder::standard(self.method_code).build()
+        ResponseBuilder::standard(self.method_type).build()
     }
 
     fn handle_password_verify_result(&self, _storage: &mut Storage) -> Vec<u8> {
         info!("TA PasswordVerifyResult: Returning success (stub):");
 
-        ResponseBuilder::standard(self.method_code)
+        ResponseBuilder::standard(self.method_type)
             .add_param(Parameter::from_i32(
                 MethodParamType::PmsVerifyOldPwdResultT,
                 0,
@@ -847,20 +844,13 @@ impl StandardRequest {
     }
 }
 
-/// Parsed native request (cmdId <= 100)
-#[derive(Debug, Clone)]
-pub struct NativeRequest {
-    pub cmd_id: u8,
-    pub data: Vec<u8>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 /// Native Commands (cmdId <= 100)
 pub enum NativeCommand {
     WriteSecret = 8,
     PresetDataDec = 26,
-    Unknown = 0,
+    Unknown(u8),
 }
 
 impl From<u8> for NativeCommand {
@@ -868,25 +858,39 @@ impl From<u8> for NativeCommand {
         match code {
             8 => NativeCommand::WriteSecret,
             26 => NativeCommand::PresetDataDec,
-            _ => NativeCommand::Unknown,
+            _ => NativeCommand::Unknown(code),
+        }
+    }
+}
+
+/// Parsed native request (cmdId <= 100)
+#[derive(Debug, Clone)]
+pub struct NativeRequest {
+    pub command: NativeCommand,
+    pub data: Vec<u8>,
+}
+
+impl From<&[u8]> for NativeRequest {
+    fn from(data: &[u8]) -> Self {
+        Self {
+            command: NativeCommand::from(data[0]),
+            data: data[4..].to_vec(),
         }
     }
 }
 
 impl NativeRequest {
     pub fn handle(&self, storage: &mut Storage) -> Vec<u8> {
-        let cmd = NativeCommand::from(self.cmd_id);
         info!(
-            command = ?cmd,
-            cmd_id = self.cmd_id,
+            command = ?self.command,
             data_len = self.data.len(),
             "Handling native command:"
         );
-        match cmd {
+        match self.command {
             NativeCommand::WriteSecret => self.handle_write_secret(storage),
             NativeCommand::PresetDataDec => self.handle_preset_data_dec(storage),
-            NativeCommand::Unknown => {
-                warn!(cmd_id = self.cmd_id, "Unknown native command:");
+            NativeCommand::Unknown(cmd_id) => {
+                warn!(cmd_id, "Unknown native command:");
                 ResponseBuilder::native().build()
             }
         }

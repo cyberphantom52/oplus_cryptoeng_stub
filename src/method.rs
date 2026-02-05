@@ -93,7 +93,37 @@ pub enum MethodType {
     TaCmdDeleteOldPassword = 13004,
     TaCmdPasswordVerifyResult = 13005,
 
-    Unknown = -1,
+    Unknown(i32),
+}
+
+impl MethodType {
+    /// Returns the method code as i32
+    pub fn code(&self) -> i32 {
+        match self {
+            MethodType::CeCmdPmsFirstCmd => 4000,
+            MethodType::CeCmdPmsEnroll => 4001,
+            MethodType::CeCmdPmsVerify => 4002,
+            MethodType::CeCmdPmsModify => 4003,
+            MethodType::CeCmdPmsDelete => 4004,
+            MethodType::CeCmdPmsGetInfo => 4005,
+            MethodType::CeCmdPmsRequestEncryptData => 4006,
+            MethodType::CeCmdPmsResetAllData => 4007,
+            MethodType::CeCmdPmsMaxCmd => 4008,
+            MethodType::CeSetLockScreenPwdType => 2019,
+            MethodType::CeCmdGetRpmbValue => 2014,
+            MethodType::TaCmdStoreOldPassword => 13001,
+            MethodType::TaCmdRetrievePasswordByOldPwd => 13002,
+            MethodType::TaCmdPasswordRetrieveValidity => 13003,
+            MethodType::TaCmdDeleteOldPassword => 13004,
+            MethodType::TaCmdPasswordVerifyResult => 13005,
+            MethodType::Unknown(code) => *code,
+        }
+    }
+
+    /// Returns the method code as big-endian bytes
+    pub fn to_be_bytes(&self) -> [u8; 4] {
+        self.code().to_be_bytes()
+    }
 }
 
 impl From<i32> for MethodType {
@@ -115,7 +145,7 @@ impl From<i32> for MethodType {
             13003 => MethodType::TaCmdPasswordRetrieveValidity,
             13004 => MethodType::TaCmdDeleteOldPassword,
             13005 => MethodType::TaCmdPasswordVerifyResult,
-            _ => MethodType::Unknown,
+            _ => MethodType::Unknown(code),
         }
     }
 }
