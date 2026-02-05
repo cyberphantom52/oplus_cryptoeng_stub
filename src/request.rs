@@ -142,8 +142,6 @@ fn format_param_value(param_type: &MethodParamType, data: &[u8]) -> String {
 #[derive(Debug, Clone)]
 pub struct StandardRequest {
     pub method_type: MethodType,
-    pub buffer_size: i32,
-    pub param_count: i32,
     pub params: HashMap<MethodParamType, Vec<u8>>,
 }
 
@@ -161,13 +159,11 @@ impl TryFrom<&[u8]> for StandardRequest {
         }
 
         let method_type = MethodType::from(BigEndian::read_i32(&buffer[0..4]));
-        let buffer_size = BigEndian::read_i32(&buffer[4..8]);
         let param_count = BigEndian::read_i32(&buffer[8..12]);
 
         debug!(
             method = ?method_type,
             code = method_type.code(),
-            buffer_size,
             param_count,
             "Parsing standard request:"
         );
@@ -220,8 +216,6 @@ impl TryFrom<&[u8]> for StandardRequest {
 
         Ok(StandardRequest {
             method_type,
-            buffer_size,
-            param_count,
             params,
         })
     }

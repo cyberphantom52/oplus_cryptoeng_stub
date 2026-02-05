@@ -132,7 +132,7 @@ mod tests {
         assert!(matches!(parsed, Some(Request::Standard(_))));
         if let Some(Request::Standard(req)) = parsed {
             assert_eq!(req.method_type, MethodType::CeCmdPmsGetInfo);
-            assert_eq!(req.param_count, 1);
+            assert_eq!(req.params.len(), 1);
         }
     }
 
