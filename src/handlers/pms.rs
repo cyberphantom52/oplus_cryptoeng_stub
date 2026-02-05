@@ -56,9 +56,8 @@ fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Result
 fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
     let system_type = request.get_param(MethodParamType::PmsTypeT)?.as_i32()?;
     let verify_type = request
-        .get_param(MethodParamType::PmsVerifyTypeT)
-        .and_then(|p| p.as_i32())
-        .unwrap_or(0);
+        .get_param(MethodParamType::PmsVerifyTypeT)?
+        .as_i32()?;
 
     let privacy_data = storage.get_privacy_data_mut(system_type);
 
@@ -158,12 +157,7 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
         .map(|p| p.data().to_vec());
 
     // Get the info type to determine what we're modifying
-    let info_type = PmsInfoType::from(
-        request
-            .get_param(MethodParamType::PmsInfoTypeT)
-            .and_then(|p| p.as_i32())
-            .unwrap_or(0),
-    );
+    let info_type = PmsInfoType::from(request.get_param(MethodParamType::PmsInfoTypeT)?.as_i32()?);
 
     let privacy_data = storage.get_privacy_data_mut(system_type);
 
