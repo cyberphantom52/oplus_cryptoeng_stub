@@ -7,8 +7,6 @@ use crate::request::StandardRequest;
 use crate::storage::Storage;
 
 mod pms;
-mod rpmb;
-mod ta;
 
 /// Handler function type for standard requests
 pub type HandlerFn = fn(&StandardRequest, &mut Storage) -> Result<Vec<u8>>;
@@ -40,7 +38,7 @@ pub fn dispatch(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<
 
     match registry.get(&code) {
         Some(handler) => handler(request, storage),
-        None => Err(CryptoengError::UnknownMethod(code)),
+        None => Err(CryptoengError::UnknownMethod(request.method_type)),
     }
 }
 

@@ -3,7 +3,7 @@
 use std::sync::PoisonError;
 use thiserror::Error;
 
-use crate::method::MethodParamType;
+use crate::method::{MethodParamType, MethodType};
 
 /// Result type alias for cryptoeng operations.
 pub type Result<T> = std::result::Result<T, CryptoengError>;
@@ -28,8 +28,8 @@ pub enum CryptoengError {
     },
 
     /// Unknown or unsupported method type.
-    #[error("unknown method type: {0}")]
-    UnknownMethod(i32),
+    #[error("unknown method type: {0:?}")]
+    UnknownMethod(MethodType),
 
     /// Unknown or unsupported native command.
     #[error("unknown native command: {0}")]

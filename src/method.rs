@@ -159,6 +159,30 @@ impl From<i32> for PmsInfoType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum MethodType {
+    CeCmdGoogleAttestationWrite = 3,
+    CeCmdGoogleAttestationVerify = 4,
+    CeCmdFindphoneGetStatus = 18,
+    CeCmdGeneratePkiCert = 24,
+    CeCmdVerifyPkiCert = 25,
+    CeCmdPresetDataDec = 26,
+    CeCmdGroupPkiVerify = 30,
+    CeCmdHdcpKeyWrite = 51,
+    CeCmdHdcpKeyVerify = 52,
+    CeCmdCleanUp = 53,
+    CeCmdGetSecuretype = 54,
+    CeCmdWidevineSupport = 59,
+    CeCmdCryptoSupport = 60,
+    CeCmdEngineer = 90,
+
+    // Find Phone
+    CeCmdRunFindphoneGetMemberFromRpmb = 2014,
+    CeCmdRunFindphoneResetRpmb = 2015,
+    CeCmdRunFindphoneIsSupportUnlockByPasswd = 2018,
+    CeCmdRunFindphoneSetPasswdType = 2019,
+    CeCmdRunFindphoneGetPasswdType = 2020,
+    CeCmdRunFindphoneVerifyPasswd = 2021,
+    CeCmdRunFindphoneGetSalt = 2022,
+
     // Privacy Management System commands
     CeCmdPmsFirstCmd = 4000,
     CeCmdPmsEnroll = 4001,
@@ -170,9 +194,39 @@ pub enum MethodType {
     CeCmdPmsResetAllData = 4007,
     CeCmdPmsMaxCmd = 4008,
 
-    // Lock screen commands
-    CeSetLockScreenPwdType = 2019,
-    CeCmdGetRpmbValue = 2014,
+    // Rpmb
+    CeCmdRpmbStorageReadCustomizeMsg = 5012,
+    CeCmdRpmbStorageWriteCustomizeMsg = 5011,
+
+    // Core
+    CeCmdRunCoreFirstCmd = 6000,
+    CeCmdCoreGetVersion = 6001,
+    CeCmdCoreGetFeatureSupport = 6002,
+    CeCmdCoreGetDeviceid = 6003,
+
+    // MSE
+    CeCmdIdMseEncCmd = 6015,
+    CeCmdIdMseDecCmd = 6016,
+
+    // PKI
+    CeCmdRunPkiFirstCmd = 10000,
+    CeCmdRunPkiHash = 10001,
+    CeCmdRunPkiHmac = 10002,
+    CeCmdRunPkiHkdf = 10003,
+    CeCmdRunPkiAes = 10004,
+    CeCmdRunPkiRsa = 10005,
+    CeCmdRunPkiEcdh = 10006,
+    CeCmdRunPkiEcies = 10007,
+    CeCmdRunPkiEcdsa = 10008,
+    CeCmdRunPkiCertVerify = 10009,
+    CeCmdRunPkiSign = 10010,
+    CeCmdRunPkiEciesCertEnc = 10011,
+    CeCmdRunPkiEciesCertDec = 10012,
+    CeCmdRunPkiPresetDataDec = 10013,
+    CeCmdRunPkiBasicAttestation = 10014,
+    CeCmdRunPkiCommonIdAttestation = 10015,
+    CeCmdRunPkiExportCert = 10020,
+    CeCmdRunPkiMax = 10021,
 
     // TA commands for password storage
     TaCmdStoreOldPassword = 13001,
@@ -181,6 +235,19 @@ pub enum MethodType {
     TaCmdDeleteOldPassword = 13004,
     TaCmdPasswordVerifyResult = 13005,
 
+    // OLock commands
+    CeCmdIdOlockFirstCmd = 14000,
+    CeCmdIdOlockStateOpen = 14001,
+    CeCmdIdOlockStateClose = 14002,
+    CeCmdIdOlockSecureLockStateOpen = 14003,
+    CeCmdIdOlockSecureLockStateClose = 14004,
+    CeCmdIdOlockStateGet = 14005,
+    CeCmdIdOlockSecureLockStateGet = 14006,
+    CeCmdIdOlockGetPasswdType = 14007,
+    CeCmdIdOlockGetSalt = 14008,
+    CeCmdIdOlockVerifyPasswd = 14009,
+    CeCmdIdOlockMaxCmd = 14010,
+
     Unknown(i32),
 }
 
@@ -188,6 +255,40 @@ impl MethodType {
     /// Returns the method code as i32
     pub fn code(&self) -> i32 {
         match self {
+            MethodType::CeCmdPresetDataDec => 26,
+            MethodType::CeCmdCleanUp => 53,
+            MethodType::CeCmdCryptoSupport => 60,
+            MethodType::CeCmdEngineer => 90,
+            MethodType::CeCmdFindphoneGetStatus => 18,
+            MethodType::CeCmdGeneratePkiCert => 24,
+            MethodType::CeCmdGetSecuretype => 54,
+            MethodType::CeCmdGoogleAttestationVerify => 4,
+            MethodType::CeCmdGoogleAttestationWrite => 3,
+            MethodType::CeCmdHdcpKeyVerify => 52,
+            MethodType::CeCmdHdcpKeyWrite => 51,
+            MethodType::CeCmdVerifyPkiCert => 25,
+            MethodType::CeCmdGroupPkiVerify => 30,
+            MethodType::CeCmdWidevineSupport => 59,
+            MethodType::CeCmdRunFindphoneResetRpmb => 2015,
+            MethodType::CeCmdRunFindphoneIsSupportUnlockByPasswd => 2018,
+            MethodType::CeCmdRunFindphoneGetPasswdType => 2020,
+            MethodType::CeCmdRunFindphoneVerifyPasswd => 2021,
+            MethodType::CeCmdRunFindphoneGetSalt => 2022,
+            MethodType::CeCmdRunCoreFirstCmd => 6000,
+
+            // OLock
+            MethodType::CeCmdIdOlockFirstCmd => 14000,
+            MethodType::CeCmdIdOlockStateOpen => 14001,
+            MethodType::CeCmdIdOlockStateClose => 14002,
+            MethodType::CeCmdIdOlockSecureLockStateOpen => 14003,
+            MethodType::CeCmdIdOlockSecureLockStateClose => 14004,
+            MethodType::CeCmdIdOlockStateGet => 14005,
+            MethodType::CeCmdIdOlockSecureLockStateGet => 14006,
+            MethodType::CeCmdIdOlockGetPasswdType => 14007,
+            MethodType::CeCmdIdOlockGetSalt => 14008,
+            MethodType::CeCmdIdOlockVerifyPasswd => 14009,
+            MethodType::CeCmdIdOlockMaxCmd => 14010,
+
             MethodType::CeCmdPmsFirstCmd => 4000,
             MethodType::CeCmdPmsEnroll => 4001,
             MethodType::CeCmdPmsVerify => 4002,
@@ -197,8 +298,36 @@ impl MethodType {
             MethodType::CeCmdPmsRequestEncryptData => 4006,
             MethodType::CeCmdPmsResetAllData => 4007,
             MethodType::CeCmdPmsMaxCmd => 4008,
-            MethodType::CeSetLockScreenPwdType => 2019,
-            MethodType::CeCmdGetRpmbValue => 2014,
+            MethodType::CeCmdRunFindphoneSetPasswdType => 2019,
+            MethodType::CeCmdRunFindphoneGetMemberFromRpmb => 2014,
+            MethodType::CeCmdCoreGetVersion => 6001,
+            MethodType::CeCmdCoreGetFeatureSupport => 6002,
+            MethodType::CeCmdCoreGetDeviceid => 6003,
+            MethodType::CeCmdIdMseEncCmd => 6015,
+            MethodType::CeCmdIdMseDecCmd => 6016,
+            MethodType::CeCmdRpmbStorageReadCustomizeMsg => 5012,
+            MethodType::CeCmdRpmbStorageWriteCustomizeMsg => 5011,
+
+            // PKI
+            MethodType::CeCmdRunPkiFirstCmd => 10000,
+            MethodType::CeCmdRunPkiHash => 10001,
+            MethodType::CeCmdRunPkiHmac => 10002,
+            MethodType::CeCmdRunPkiHkdf => 10003,
+            MethodType::CeCmdRunPkiAes => 10004,
+            MethodType::CeCmdRunPkiRsa => 10005,
+            MethodType::CeCmdRunPkiEcdh => 10006,
+            MethodType::CeCmdRunPkiEcies => 10007,
+            MethodType::CeCmdRunPkiEcdsa => 10008,
+            MethodType::CeCmdRunPkiCertVerify => 10009,
+            MethodType::CeCmdRunPkiSign => 10010,
+            MethodType::CeCmdRunPkiEciesCertEnc => 10011,
+            MethodType::CeCmdRunPkiEciesCertDec => 10012,
+            MethodType::CeCmdRunPkiPresetDataDec => 10013,
+            MethodType::CeCmdRunPkiBasicAttestation => 10014,
+            MethodType::CeCmdRunPkiCommonIdAttestation => 10015,
+            MethodType::CeCmdRunPkiExportCert => 10020,
+            MethodType::CeCmdRunPkiMax => 10021,
+
             MethodType::TaCmdStoreOldPassword => 13001,
             MethodType::TaCmdRetrievePasswordByOldPwd => 13002,
             MethodType::TaCmdPasswordRetrieveValidity => 13003,
@@ -226,8 +355,8 @@ impl From<i32> for MethodType {
             4006 => MethodType::CeCmdPmsRequestEncryptData,
             4007 => MethodType::CeCmdPmsResetAllData,
             4008 => MethodType::CeCmdPmsMaxCmd,
-            2019 => MethodType::CeSetLockScreenPwdType,
-            2014 => MethodType::CeCmdGetRpmbValue,
+            2019 => MethodType::CeCmdRunFindphoneSetPasswdType,
+            2014 => MethodType::CeCmdRunFindphoneGetMemberFromRpmb,
             13001 => MethodType::TaCmdStoreOldPassword,
             13002 => MethodType::TaCmdRetrievePasswordByOldPwd,
             13003 => MethodType::TaCmdPasswordRetrieveValidity,
