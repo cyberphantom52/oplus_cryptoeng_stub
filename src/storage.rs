@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, path::PathBuf};
-use tracing::{debug, info, warn};
+use tracing::info;
 
 use crate::error::{Result, StorageError};
 
@@ -61,22 +61,14 @@ impl Storage {
     pub fn load() -> Self {
         let path = PathBuf::from(STORAGE_DIR).join("storage.json");
         if path.exists() {
-            match fs::read_to_string(&path) {
-                Ok(content) => match serde_json::from_str(&content) {
-                    Ok(storage) => {
-                        info!(path = %path.display(), "Loaded storage:");
-                        return storage;
-                    }
-                    Err(e) => {
-                        warn!(path = %path.display(), error = %e, "Failed to parse storage file:");
-                    }
-                },
-                Err(e) => {
-                    warn!(path = %path.display(), error = %e, "Failed to read storage file:");
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(storage) = serde_json::from_str(&content) {
+                    info!(path = %path.display(), "Loaded storage");
+                    return storage;
                 }
             }
         }
-        info!(path = %path.display(), "Creating new storage:");
+        info!(path = %path.display(), "Creating new storage");
         Self::new()
     }
 
@@ -88,7 +80,6 @@ impl Storage {
         let content = serde_json::to_string_pretty(self).map_err(StorageError::Serialize)?;
         fs::write(&file_path, content).map_err(StorageError::Write)?;
 
-        debug!(path = %file_path.display(), "Saved storage:");
         Ok(())
     }
 

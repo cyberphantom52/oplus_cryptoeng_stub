@@ -1,4 +1,6 @@
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
+use std::collections::HashMap;
+use std::fmt;
 use tracing::{debug, info, warn};
 
 use crate::{
@@ -8,7 +10,6 @@ use crate::{
     response::ResponseBuilder,
     storage::Storage,
 };
-use std::collections::HashMap;
 
 /// Request type enum
 #[derive(Debug, Clone)]
@@ -29,7 +30,6 @@ impl Request {
         // If the first byte is a small number and high bytes are 0, it's a native command
         if data[0] <= 100 && data[1..=3] == [0, 0, 0] {
             let request = NativeRequest::try_from(data)?;
-            debug!(command = ?request.command, "Detected native command:");
             return Ok(Request::Native(request));
         }
 
@@ -45,6 +45,25 @@ pub struct StandardRequest {
     pub params: HashMap<MethodParamType, Parameter>,
 }
 
+impl fmt::Display for StandardRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.method_type)?;
+        if !self.params.is_empty() {
+            write!(f, " {{")?;
+            let mut first = true;
+            for (k, v) in &self.params {
+                if !first {
+                    write!(f, ",")?;
+                }
+                first = false;
+                write!(f, " {:?}={}", k, v)?;
+            }
+            write!(f, " }}")?;
+        }
+        Ok(())
+    }
+}
+
 impl TryFrom<&[u8]> for StandardRequest {
     type Error = CryptoengError;
 
@@ -53,7 +72,7 @@ impl TryFrom<&[u8]> for StandardRequest {
             warn!(
                 len = buffer.len(),
                 min = 12,
-                "Standard request buffer too short:"
+                "Standard request buffer too short"
             );
             return Err(CryptoengError::BufferTooShort {
                 got: buffer.len(),
@@ -64,13 +83,6 @@ impl TryFrom<&[u8]> for StandardRequest {
         let method_type = MethodType::from(BigEndian::read_i32(&buffer[0..4]));
         let param_count = BigEndian::read_i32(&buffer[8..12]);
 
-        debug!(
-            method = ?method_type,
-            code = method_type.code(),
-            param_count,
-            "Parsing standard request:"
-        );
-
         let mut params = HashMap::new();
         let mut offset = 12;
 
@@ -80,7 +92,7 @@ impl TryFrom<&[u8]> for StandardRequest {
                     param_index = i,
                     offset,
                     buffer_len = buffer.len(),
-                    "Buffer too short for param header:"
+                    "Buffer too short for param header"
                 );
                 return Err(CryptoengError::BufferTooShort {
                     got: buffer.len(),
@@ -98,7 +110,7 @@ impl TryFrom<&[u8]> for StandardRequest {
                     param_len,
                     offset,
                     buffer_len = buffer.len(),
-                    "Buffer too short for param data:"
+                    "Buffer too short for param data"
                 );
                 return Err(CryptoengError::BufferTooShort {
                     got: buffer.len(),
@@ -112,20 +124,17 @@ impl TryFrom<&[u8]> for StandardRequest {
             let param_type = MethodParamType::from(param_type_code);
             let parameter = Parameter::new(param_type, param_data);
 
-            debug!(
-                param_index = i,
-                param_type = ?param_type,
-                value = %parameter,
-                "Param:"
-            );
-
             params.insert(param_type, parameter);
         }
 
-        Ok(StandardRequest {
+        let request = StandardRequest {
             method_type,
             params,
-        })
+        };
+
+        debug!(request = %request, "Recieved Request");
+
+        Ok(request)
     }
 }
 
@@ -134,7 +143,7 @@ impl StandardRequest {
         info!(
             command = ?self.method_type,
             code = self.method_type.code(),
-            "Handling command:"
+            "Handling command"
         );
 
         // Try to dispatch to a registered handler
@@ -195,16 +204,11 @@ impl TryFrom<&[u8]> for NativeRequest {
 
 impl NativeRequest {
     pub fn handle(&self, storage: &mut Storage) -> Result<Vec<u8>> {
-        info!(
-            command = ?self.command,
-            data_len = self.data.len(),
-            "Handling native command:"
-        );
         match self.command {
             NativeCommand::WriteSecret => self.handle_write_secret(storage),
             NativeCommand::PresetDataDec => self.handle_preset_data_dec(storage),
             NativeCommand::Unknown(cmd_id) => {
-                warn!(cmd_id, "Unknown native command:");
+                warn!(cmd_id, "Unknown native command");
                 Err(CryptoengError::UnknownNativeCommand(cmd_id))
             }
         }
@@ -213,10 +217,6 @@ impl NativeRequest {
     fn handle_write_secret(&self, storage: &mut Storage) -> Result<Vec<u8>> {
         // Parse: [secret_length: 4 bytes LE][secret: N bytes][token_length: 4 bytes LE][token: M bytes]
         if self.data.len() < 4 {
-            warn!(
-                data_len = self.data.len(),
-                "WriteSecret: Buffer too short for secret length:"
-            );
             return Err(CryptoengError::BufferTooShort {
                 got: self.data.len(),
                 min: 4,
@@ -227,11 +227,6 @@ impl NativeRequest {
         let mut offset = 4;
 
         if self.data.len() < offset + secret_length {
-            warn!(
-                data_len = self.data.len(),
-                expected = offset + secret_length,
-                "WriteSecret: Buffer too short for secret data:"
-            );
             return Err(CryptoengError::BufferTooShort {
                 got: self.data.len(),
                 min: offset + secret_length,
@@ -242,11 +237,6 @@ impl NativeRequest {
         offset += secret_length;
 
         if self.data.len() < offset + 4 {
-            warn!(
-                data_len = self.data.len(),
-                expected = offset + 4,
-                "WriteSecret: Buffer too short for token length:"
-            );
             return Err(CryptoengError::BufferTooShort {
                 got: self.data.len(),
                 min: offset + 4,
@@ -257,22 +247,11 @@ impl NativeRequest {
         offset += 4;
 
         if self.data.len() < offset + token_length {
-            warn!(
-                data_len = self.data.len(),
-                expected = offset + token_length,
-                "WriteSecret: Buffer too short for token data:"
-            );
             return Err(CryptoengError::BufferTooShort {
                 got: self.data.len(),
                 min: offset + token_length,
             });
         }
-
-        info!(
-            secret_len = secret_length,
-            token_len = token_length,
-            "WriteSecret: Stored secret:"
-        );
 
         storage.store_secret(secret_length as i32, secret.to_vec());
         storage.save()?;
@@ -283,10 +262,6 @@ impl NativeRequest {
     fn handle_preset_data_dec(&self, _storage: &mut Storage) -> Result<Vec<u8>> {
         // Parse: [aliBuf_len: 4 bytes LE][aliBuf: N bytes][enc_len: 4 bytes LE][enc: M bytes]
         if self.data.len() < 4 {
-            warn!(
-                data_len = self.data.len(),
-                "PresetDataDec: Buffer too short for aliBuf length:"
-            );
             return Err(CryptoengError::BufferTooShort {
                 got: self.data.len(),
                 min: 4,
@@ -297,26 +272,16 @@ impl NativeRequest {
         let mut offset = 4;
 
         if self.data.len() < offset + ali_buf_len {
-            warn!(
-                data_len = self.data.len(),
-                expected = offset + ali_buf_len,
-                "PresetDataDec: Buffer too short for aliBuf data:"
-            );
             return Err(CryptoengError::BufferTooShort {
                 got: self.data.len(),
                 min: offset + ali_buf_len,
             });
         }
 
-        let ali_buf = &self.data[offset..offset + ali_buf_len];
+        let _ali_buf = &self.data[offset..offset + ali_buf_len];
         offset += ali_buf_len;
 
         if self.data.len() < offset + 4 {
-            warn!(
-                data_len = self.data.len(),
-                expected = offset + 4,
-                "PresetDataDec: Buffer too short for enc length:"
-            );
             return Err(CryptoengError::BufferTooShort {
                 got: self.data.len(),
                 min: offset + 4,
@@ -327,11 +292,6 @@ impl NativeRequest {
         offset += 4;
 
         if self.data.len() < offset + enc_len {
-            warn!(
-                data_len = self.data.len(),
-                expected = offset + enc_len,
-                "PresetDataDec: Buffer too short for enc data:"
-            );
             return Err(CryptoengError::BufferTooShort {
                 got: self.data.len(),
                 min: offset + enc_len,
@@ -339,12 +299,6 @@ impl NativeRequest {
         }
 
         let enc_data = &self.data[offset..offset + enc_len];
-
-        info!(
-            ali_buf = %String::from_utf8_lossy(ali_buf),
-            enc_len,
-            "PresetDataDec: Returning data as-is (stub):"
-        );
 
         Ok(ResponseBuilder::native()
             .extra_data(enc_data.to_vec())

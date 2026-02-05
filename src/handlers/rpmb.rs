@@ -25,10 +25,7 @@ fn handle_set_lock_screen_pwd_type(
     storage.set_lock_screen_pwd_type(user_id, pwd_type);
     storage.save()?;
 
-    info!(
-        user_id,
-        pwd_type, "SetLockScreenPwdType: Password type set:"
-    );
+    info!(user_id, pwd_type, "Lock screen password type set");
     Ok(ResponseBuilder::standard(request.method_type).build())
 }
 
@@ -37,12 +34,6 @@ fn handle_get_rpmb_value(request: &StandardRequest, storage: &mut Storage) -> Re
     let key = String::from_utf8_lossy(key_param.data()).to_string();
 
     let value = storage.get_rpmb_value(&key).cloned().unwrap_or_default();
-
-    info!(
-        key = %key,
-        value_len = value.len(),
-        "GetRpmbValue:"
-    );
 
     Ok(ResponseBuilder::standard(request.method_type)
         .add_param(Parameter::new(MethodParamType::PmsCommonBuffer1T, value))

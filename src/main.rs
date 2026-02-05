@@ -4,7 +4,7 @@ use oplus_cryptoeng_stub::{BnCryptoeng, CryptoengService};
 use rsbinder::*;
 use tracing::{info, Level};
 use tracing_logcat::{LogcatMakeWriter, LogcatTag};
-use tracing_subscriber::{fmt::format::Format, EnvFilter};
+use tracing_subscriber::EnvFilter;
 
 const DESCRIPTOR: &str = "vendor.oplus.hardware.cryptoeng.ICryptoeng/default";
 
@@ -18,9 +18,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let writer = LogcatMakeWriter::new(tag).expect("Failed to initialize logcat writer");
 
     tracing_subscriber::fmt()
-        .event_format(Format::default().with_level(false).without_time())
         .with_writer(writer)
-        .with_ansi(false)
         .with_max_level(Level::TRACE)
         .with_env_filter(filter)
         .init();

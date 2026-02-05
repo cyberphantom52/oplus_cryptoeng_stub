@@ -8,7 +8,7 @@ mod utils;
 
 use rsbinder::*;
 use std::sync::{Arc, RwLock};
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 include!(concat!(env!("OUT_DIR"), "/cryptoeng.rs"));
 
@@ -61,12 +61,10 @@ impl Interface for CryptoengService {}
 
 impl ICryptoeng for CryptoengService {
     fn cryptoeng_invoke_command(&self, request: &[u8]) -> rsbinder::status::Result<Vec<u8>> {
-        info!(len = request.len(), "Received command:");
-
         let response = match self.handle_request(request) {
             Ok(response) => response,
             Err(e) => {
-                error!(error = %e, "Request handling failed:");
+                error!(error = %e, "Request handling failed");
                 debug!(
                     hex = format!("{:02x?}", &request[..std::cmp::min(64, request.len())]),
                     "Raw request data"
@@ -78,17 +76,14 @@ impl ICryptoeng for CryptoengService {
             }
         };
 
-        info!(len = response.len(), "Sending response:");
         Ok(response)
     }
 
     fn getInterfaceVersion(&self) -> rsbinder::status::Result<i32> {
-        debug!(version = INTERFACE_VERSION, "getInterfaceVersion:");
         Ok(INTERFACE_VERSION)
     }
 
     fn getInterfaceHash(&self) -> rsbinder::status::Result<String> {
-        debug!(hash = INTERFACE_HASH, "getInterfaceHash:");
         Ok(INTERFACE_HASH.to_string())
     }
 }

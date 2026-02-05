@@ -1,5 +1,5 @@
 use byteorder::{BigEndian, ByteOrder};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::error::{CryptoengError, Result};
 use crate::method::{MethodParamType, MethodType, Parameter};
@@ -62,17 +62,9 @@ fn handle_store_old_password(request: &StandardRequest, storage: &mut Storage) -
     }
 
     pwd_data.user_id = user_id;
-
-    // Capture values before releasing the mutable borrow
-    let old_pwd_type = pwd_data.old_pwd_type;
-    let current_pwd_type = pwd_data.current_pwd_type;
-
     storage.save()?;
 
-    info!(
-        user_id,
-        old_pwd_type, current_pwd_type, "TA StoreOldPassword: Password stored:"
-    );
+    info!(user_id, "Password stored");
 
     Ok(ResponseBuilder::standard(request.method_type).build())
 }
@@ -86,12 +78,7 @@ fn handle_retrieve_password_by_old_pwd(
         .as_i32()?;
 
     if let Some(pwd_data) = storage.get_password_data(user_id) {
-        info!(
-            user_id,
-            current_pwd_type = pwd_data.current_pwd_type,
-            buffer_len = pwd_data.current_pwd_buffer.len(),
-            "TA RetrievePasswordByOldPwd: Found:"
-        );
+        info!(user_id, "Password retrieved");
 
         Ok(ResponseBuilder::standard(request.method_type)
             .add_param(Parameter::new(
@@ -108,7 +95,7 @@ fn handle_retrieve_password_by_old_pwd(
             ))
             .build())
     } else {
-        tracing::warn!(user_id, "TA RetrievePasswordByOldPwd: Not found:");
+        warn!(user_id, "Password data not found");
         Err(CryptoengError::PasswordDataNotFound(user_id))
     }
 }
@@ -121,8 +108,6 @@ fn handle_password_retrieve_validity(
         .get_param(MethodParamType::PmsPwdUseridT)?
         .as_i32()?;
     let is_valid = storage.get_password_data(user_id).is_some();
-
-    info!(user_id, is_valid, "TA PasswordRetrieveValidity:");
 
     Ok(ResponseBuilder::standard(request.method_type)
         .add_param(Parameter::from_i32(
@@ -140,7 +125,7 @@ fn handle_delete_old_password(request: &StandardRequest, storage: &mut Storage) 
     storage.delete_password_data(user_id);
     storage.save()?;
 
-    info!(user_id, "TA DeleteOldPassword: Deleted:");
+    info!(user_id, "Password deleted");
     Ok(ResponseBuilder::standard(request.method_type).build())
 }
 
@@ -148,8 +133,6 @@ fn handle_password_verify_result(
     request: &StandardRequest,
     _storage: &mut Storage,
 ) -> Result<Vec<u8>> {
-    info!("TA PasswordVerifyResult: Returning success (stub):");
-
     Ok(ResponseBuilder::standard(request.method_type)
         .add_param(Parameter::from_i32(
             MethodParamType::PmsVerifyOldPwdResultT,
