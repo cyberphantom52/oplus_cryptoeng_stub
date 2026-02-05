@@ -117,53 +117,19 @@ impl std::fmt::Display for Parameter {
             | MethodParamType::PmsOldPwdBufferT
             | MethodParamType::PmsCurrentPwdBufferT
             | MethodParamType::PmsCurrentPasswordBuffer => {
-                if self.data.len() <= 16 {
-                    write!(
-                        f,
-                        "[{}]",
-                        self.data
-                            .iter()
-                            .map(|b| format!("{:02x}", b))
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    )
-                } else {
-                    write!(
-                        f,
-                        "[{} ... +{} more]",
-                        self.data[..8]
-                            .iter()
-                            .map(|b| format!("{:02x}", b))
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                        self.data.len() - 8
-                    )
-                }
+                write!(
+                    f,
+                    "[{}]",
+                    self.data
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
             }
             _ => {
-                if self.data.len() <= 8 {
-                    write!(
-                        f,
-                        "{} bytes: [{}]",
-                        self.data.len(),
-                        self.data
-                            .iter()
-                            .map(|b| format!("{:02x}", b))
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    )
-                } else {
-                    write!(
-                        f,
-                        "{} bytes: [{} ...]",
-                        self.data.len(),
-                        self.data[..4]
-                            .iter()
-                            .map(|b| format!("{:02x}", b))
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    )
-                }
+                tracing::error!("Display not implemented for {:?}", self.ty);
+                Ok(())
             }
         }
     }
