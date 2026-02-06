@@ -119,11 +119,11 @@ impl TryFrom<&[u8]> for StandardRequest {
                 });
             }
 
-            let param_data = buffer[offset..offset + param_len].to_vec();
+            let param_data = &buffer[offset..offset + param_len];
             offset += param_len;
 
             let param_type = MethodParamType::from(param_type_code);
-            let parameter = Parameter::new(param_type, param_data)?;
+            let parameter = Parameter::new(param_type, &param_data)?;
 
             params.insert(param_type, parameter);
         }

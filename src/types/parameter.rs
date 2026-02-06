@@ -1,5 +1,6 @@
 use byteorder::{BigEndian, ByteOrder};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use tracing::debug;
 
 use crate::error::{CryptoengError, Result};
@@ -14,29 +15,16 @@ pub struct Parameter {
 }
 
 impl Parameter {
-    pub fn new(ty: MethodParamType, data: Vec<u8>) -> Result<Self> {
+    pub fn new(ty: MethodParamType, data: &[u8]) -> Result<Self> {
         Ok(Self {
             ty,
-            value: Value::try_from(ty, &data)?,
+            value: Value::try_from(ty, data)?,
         })
     }
 
-    /// Create a parameter from an i32 value (big-endian)
-    pub fn from_i32(ty: MethodParamType, value: i32) -> Result<Self> {
-        let mut data = vec![0u8; 4];
-        BigEndian::write_i32(&mut data, value);
-        Self::new(ty, data)
-    }
-
-    /// Create a parameter from a string value
-    pub fn from_str(ty: MethodParamType, value: &str) -> Result<Self> {
-        let data = value.as_bytes().to_vec();
-        Self::new(ty, data)
-    }
-
     /// Get the raw data
-    pub fn data(&self) -> Vec<u8> {
-        self.value.as_bytes()
+    pub fn value(&self) -> &Value {
+        &self.value
     }
 
     /// Try to read the data as a big-endian i32
@@ -373,35 +361,35 @@ impl Value {
         }
     }
 
-    pub fn as_bytes(&self) -> Vec<u8> {
+    pub fn as_bytes(&self) -> Cow<'_, [u8]> {
         match self {
             Value::SystemType(t) => {
                 let mut buf = [0u8; 4];
                 BigEndian::write_i32(&mut buf, *t as i32);
-                buf.to_vec()
+                Cow::Owned(buf.to_vec())
             }
             Value::PasswordQuality(q) => {
                 let mut buf = [0u8; 4];
                 BigEndian::write_i32(&mut buf, *q as i32);
-                buf.to_vec()
+                Cow::Owned(buf.to_vec())
             }
             Value::VerifyType(v) => {
                 let mut buf = [0u8; 4];
                 BigEndian::write_i32(&mut buf, *v as i32);
-                buf.to_vec()
+                Cow::Owned(buf.to_vec())
             }
             Value::Integer(i) => {
                 let mut buf = [0u8; 4];
                 BigEndian::write_i32(&mut buf, *i);
-                buf.to_vec()
+                Cow::Owned(buf.to_vec())
             }
             Value::Boolean(b) => {
                 let mut buf = [0u8; 4];
                 BigEndian::write_i32(&mut buf, if *b { 1 } else { 0 });
-                buf.to_vec()
+                Cow::Owned(buf.to_vec())
             }
-            Value::String(s) => s.as_bytes().to_vec(),
-            Value::Buffer(buf) => buf.clone(),
+            Value::String(s) => Cow::Borrowed(s.as_bytes()),
+            Value::Buffer(buf) => Cow::Borrowed(buf),
         }
     }
 }

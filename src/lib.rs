@@ -146,7 +146,7 @@ mod tests {
     fn test_response_builder() {
         let response = ResponseBuilder::standard(MethodType::CeCmdPmsGetInfo)
             .result_code(0)
-            .add_param(Parameter::from_i32(MethodParamType::PmsPwdTypeT, 1).unwrap())
+            .add_param(Parameter::new(MethodParamType::PmsPwdTypeT, &1i32.to_be_bytes()).unwrap())
             .build();
 
         // Check header

@@ -31,11 +31,11 @@ fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Result
 
     // Get password info (hash) - required for enrollment
     let pwd_info = request.get_param(MethodParamType::PmsPwdInfoT)?;
-    privacy_data.password_hash = pwd_info.data().to_vec();
+    privacy_data.password_hash = pwd_info.value().as_bytes().to_vec();
 
     // Get email (optional)
     if let Ok(email) = request.get_param(MethodParamType::PmsHideEmailT) {
-        privacy_data.email = String::from_utf8_lossy(&email.data()).to_string();
+        privacy_data.email = String::from_utf8_lossy(&*email.value().as_bytes()).to_string();
     }
 
     // Generate a handler token (must be exactly 8 bytes for password verification)
@@ -50,7 +50,7 @@ fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Result
     storage.save()?;
 
     Ok(ResponseBuilder::standard(request.method_type)
-        .add_param(Parameter::new(MethodParamType::PmsHandlerT, handler)?)
+        .add_param(Parameter::new(MethodParamType::PmsHandlerT, &handler)?)
         .build())
 }
 
@@ -82,7 +82,7 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result
     }
 
     let verify_buffer = request.get_param(MethodParamType::PmsVerifyBufferT)?;
-    let verify_data = verify_buffer.data().to_vec();
+    let verify_data = verify_buffer.value().as_bytes();
 
     // Compute expected hash: SHA256(stored_password_hash + handler)
     let mut combined = Vec::with_capacity(40);
@@ -116,8 +116,8 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result
         storage.save()?;
 
         Ok(ResponseBuilder::standard(request.method_type)
-            .add_param(Parameter::new(MethodParamType::PmsChallengeT, challenge)?)
-            .add_param(Parameter::new(MethodParamType::PmsHandlerT, new_handler)?)
+            .add_param(Parameter::new(MethodParamType::PmsChallengeT, &challenge)?)
+            .add_param(Parameter::new(MethodParamType::PmsHandlerT, &new_handler)?)
             .build())
     } else {
         // Decrement retry count
@@ -155,14 +155,14 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
     // Get the challenge provided in the modify request (optional for some flows)
     let challenge = request
         .get_param(MethodParamType::PmsChallengeT)
-        .map(|p| p.data().to_vec());
+        .map(|p| p.value().as_bytes());
 
     // Get the info type to determine what we're modifying
     let info_type = InfoType::try_from(
-        request
+        &*request
             .get_param(MethodParamType::PmsInfoTypeT)?
-            .data()
-            .as_slice(),
+            .value()
+            .as_bytes(),
     )?;
 
     let privacy_data = storage.get_privacy_data_mut(system_type);
@@ -190,7 +190,7 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
         InfoType::Password => {
             // Password modification - read from PmsInfoBufferT (208)
             if let Ok(pwd_info) = request.get_param(MethodParamType::PmsInfoBufferT) {
-                privacy_data.password_hash = pwd_info.data().to_vec();
+                privacy_data.password_hash = pwd_info.value().as_bytes().to_vec();
                 info!(
                     system_type,
                     password_type = privacy_data.password_type,
@@ -198,7 +198,7 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
                 );
             } else if let Ok(pwd_info) = request.get_param(MethodParamType::PmsPwdInfoT) {
                 // Fallback to old param type for compatibility
-                privacy_data.password_hash = pwd_info.data().to_vec();
+                privacy_data.password_hash = pwd_info.value().as_bytes().to_vec();
                 info!(
                     system_type,
                     password_type = privacy_data.password_type,
@@ -215,7 +215,8 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
         InfoType::Email => {
             // Email modification
             if let Ok(email) = request.get_param(MethodParamType::PmsInfoBufferT) {
-                privacy_data.email = String::from_utf8_lossy(&email.data()).to_string();
+                privacy_data.email =
+                    String::from_utf8_lossy(&*email.value().as_bytes()).to_string();
                 info!(system_type, "Email updated");
             }
         }
@@ -240,7 +241,7 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
 
     // Return success with new handler
     Ok(ResponseBuilder::standard(request.method_type)
-        .add_param(Parameter::new(MethodParamType::PmsHandlerT, new_handler)?)
+        .add_param(Parameter::new(MethodParamType::PmsHandlerT, &new_handler)?)
         .build())
 }
 
@@ -271,38 +272,38 @@ fn handle_pms_get_info(request: &StandardRequest, storage: &mut Storage) -> Resu
     );
 
     let mut builder = ResponseBuilder::standard(request.method_type)
-        .add_param(Parameter::from_i32(
+        .add_param(Parameter::new(
             MethodParamType::PmsPwdTypeT,
-            privacy_data.password_type,
+            &privacy_data.password_type.to_be_bytes(),
         )?)
-        .add_param(Parameter::from_i32(
+        .add_param(Parameter::new(
             MethodParamType::PmsPwdRetryCountLeftT,
-            privacy_data.retry_count,
+            &privacy_data.retry_count.to_be_bytes(),
         )?)
-        .add_param(Parameter::from_i32(
+        .add_param(Parameter::new(
             MethodParamType::PmsPwdLockTimeLeftT,
-            privacy_data.lock_time,
+            &privacy_data.lock_time.to_be_bytes(),
         )?)
-        .add_param(Parameter::from_i32(
+        .add_param(Parameter::new(
             MethodParamType::PmsSecureQuestionRetryCountLeftT,
-            privacy_data.secure_question_retry_count,
+            &privacy_data.secure_question_retry_count.to_be_bytes(),
         )?)
-        .add_param(Parameter::from_i32(
+        .add_param(Parameter::new(
             MethodParamType::PmsSecureQuestionLockTimeLeftT,
-            privacy_data.secure_question_lock_time,
+            &privacy_data.secure_question_lock_time.to_be_bytes(),
         )?);
 
     if !privacy_data.handler.is_empty() {
         builder = builder.add_param(Parameter::new(
             MethodParamType::PmsHandlerT,
-            privacy_data.handler.clone(),
+            &privacy_data.handler,
         )?);
     }
 
     if !privacy_data.email.is_empty() {
-        builder = builder.add_param(Parameter::from_str(
+        builder = builder.add_param(Parameter::new(
             MethodParamType::PmsHideEmailT,
-            &privacy_data.email,
+            privacy_data.email.as_bytes(),
         )?);
     }
 
@@ -314,10 +315,12 @@ fn handle_pms_request_encrypt_data(
     _storage: &mut Storage,
 ) -> Result<Vec<u8>> {
     let encrypted_data = request.get_param(MethodParamType::PmsInfoBufferT)?;
-    let data = encrypted_data.data().to_vec();
 
     Ok(ResponseBuilder::standard(request.method_type)
-        .add_param(Parameter::new(MethodParamType::PmsEncBufferT, data)?)
+        .add_param(Parameter::new(
+            MethodParamType::PmsEncBufferT,
+            &encrypted_data.value().as_bytes(),
+        )?)
         .build())
 }
 
