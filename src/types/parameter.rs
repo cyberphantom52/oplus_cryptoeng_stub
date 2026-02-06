@@ -1,5 +1,6 @@
 use byteorder::{BigEndian, ByteOrder};
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 use crate::error::{CryptoengError, Result};
 
@@ -362,11 +363,13 @@ impl Value {
                 Ok(Value::PasswordQuality(PasswordQuality::try_from(buf)?))
             }
             MethodParamType::PmsVerifyTypeT => Ok(Value::VerifyType(VerifyType::try_from(buf)?)),
-            MethodParamType::PmsHideEmailT => Ok(Value::Boolean(BigEndian::read_i32(buf) != 0)),
             MethodParamType::PmsAccountName => {
                 Ok(Value::String(String::from_utf8_lossy(buf).to_string()))
             }
-            _ => Ok(Value::Buffer(buf.to_vec())),
+            _ => {
+                debug!(type=?ty, "No special parsing for parameter type, treating as raw buffer");
+                Ok(Value::Buffer(buf.to_vec()))
+            }
         }
     }
 
