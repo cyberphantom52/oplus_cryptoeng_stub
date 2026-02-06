@@ -350,6 +350,16 @@ impl Value {
                 Ok(Value::PasswordQuality(PasswordQuality::try_from(buf)?))
             }
             MethodParamType::PmsVerifyTypeT => Ok(Value::VerifyType(VerifyType::try_from(buf)?)),
+            MethodParamType::PmsHideEmailT => {
+                if buf.len() == 4 {
+                    // Incoming requests: boolean flag (0 or 1)
+                    Ok(Value::Boolean(BigEndian::read_i32(buf) != 0))
+                } else {
+                    // Outgoing responses: email string
+                    // TODO: Send empty if incoming value was false
+                    Ok(Value::String(String::from_utf8_lossy(buf).to_string()))
+                }
+            }
             MethodParamType::PmsAccountName => {
                 Ok(Value::String(String::from_utf8_lossy(buf).to_string()))
             }
