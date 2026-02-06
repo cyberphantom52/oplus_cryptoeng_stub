@@ -1,7 +1,6 @@
 use byteorder::{BigEndian, ByteOrder};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use tracing::debug;
 
 use crate::error::{CryptoengError, Result};
 
@@ -354,10 +353,18 @@ impl Value {
             MethodParamType::PmsAccountName => {
                 Ok(Value::String(String::from_utf8_lossy(buf).to_string()))
             }
-            _ => {
-                debug!(type=?ty, "No special parsing for parameter type, treating as raw buffer");
-                Ok(Value::Buffer(buf.to_vec()))
+            MethodParamType::PmsPwdRetryCountLeftT
+            | MethodParamType::PmsSecureQuestionRetryCountLeftT => {
+                if buf.len() < 4 {
+                    return Err(CryptoengError::ParameterBufferTooShort {
+                        param: ty,
+                        expected: 4,
+                        got: buf.len(),
+                    });
+                }
+                Ok(Value::Integer(BigEndian::read_i32(buf)))
             }
+            _ => Ok(Value::Buffer(buf.to_vec())),
         }
     }
 

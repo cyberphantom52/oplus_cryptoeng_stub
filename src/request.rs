@@ -1,7 +1,7 @@
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use std::collections::HashMap;
 use std::fmt;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::{
     error::{CryptoengError, Result},
