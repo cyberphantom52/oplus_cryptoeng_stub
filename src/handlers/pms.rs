@@ -22,12 +22,26 @@ register_handler!(
 register_handler!(MethodType::CeCmdPmsResetAllData, handle_pms_reset_all_data);
 
 fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
-    let system_type = request.get_param(MethodParamType::PmsTypeT)?.as_i32()?;
+    let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
+        Value::SystemType(ty) => *ty,
+        _ => {
+            return Err(CryptoengError::ParseError(
+                "Invalid system type parameter".to_string(),
+            ));
+        }
+    };
     let privacy_data = storage.get_privacy_data_mut(system_type);
 
     // Get password type (required for enrollment)
-    let pwd_type = request.get_param(MethodParamType::PmsPwdTypeT)?.as_i32()?;
-    privacy_data.password_type = pwd_type;
+    let password_type = match request.get_param(MethodParamType::PmsPwdTypeT)?.value() {
+        Value::PasswordQuality(q) => *q,
+        _ => {
+            return Err(CryptoengError::ParseError(
+                "Invalid system type parameter".to_string(),
+            ));
+        }
+    };
+    privacy_data.password_type = password_type;
 
     // Get password info (hash) - required for enrollment
     let pwd_info = request.get_param(MethodParamType::PmsPwdInfoT)?;
@@ -57,7 +71,7 @@ fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Result
                 Some(cont) => format!("{}{}", first, cont),
                 None => first,
             };
-            info!(system_type, email = %privacy_data.email, "Email saved during enroll");
+            info!(email = %privacy_data.email, "Email saved during enroll");
         }
     }
 
@@ -67,7 +81,7 @@ fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Result
     privacy_data.retry_count = 5;
     privacy_data.lock_time = 0;
 
-    info!(system_type, password_type = pwd_type, "User enrolled");
+    info!(?system_type, ?password_type, "User enrolled");
 
     let handler = privacy_data.handler.clone();
     storage.save()?;
@@ -78,17 +92,30 @@ fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Result
 }
 
 fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
-    let system_type = request.get_param(MethodParamType::PmsTypeT)?.as_i32()?;
-    let verify_type = request
-        .get_param(MethodParamType::PmsVerifyTypeT)?
-        .as_i32()?;
+    let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
+        Value::SystemType(ty) => *ty,
+        _ => {
+            return Err(CryptoengError::ParseError(
+                "Invalid system type parameter".to_string(),
+            ));
+        }
+    };
+
+    let verify_type = match request.get_param(MethodParamType::PmsVerifyTypeT)?.value() {
+        Value::VerifyType(ty) => *ty,
+        _ => {
+            return Err(CryptoengError::ParseError(
+                "Invalid system type parameter".to_string(),
+            ));
+        }
+    };
 
     let privacy_data = storage.get_privacy_data_mut(system_type);
 
     // Check if locked
     if privacy_data.lock_time > 0 {
         warn!(
-            system_type,
+            ?system_type,
             lock_time = privacy_data.lock_time,
             "Account is locked"
         );
@@ -100,7 +127,7 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result
 
     // Check if enrolled
     if !privacy_data.enrolled {
-        warn!(system_type, "Not enrolled");
+        warn!(?system_type, "Not enrolled");
         return Err(CryptoengError::NotEnrolled(system_type));
     }
 
@@ -122,7 +149,7 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result
         // The challenge must be 64 bytes to match what modifyPasswordByChallenge expects
         let challenge = generate_random_bytes(64);
 
-        info!(system_type, verify_type, "Password verified");
+        info!(?system_type, ?verify_type, "Password verified");
 
         // Reset retry count on success
         privacy_data.retry_count = 5;
@@ -147,7 +174,7 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result
         privacy_data.retry_count = (privacy_data.retry_count - 1).max(0);
 
         warn!(
-            system_type,
+            ?system_type,
             retries_left = privacy_data.retry_count,
             "Password mismatch"
         );
@@ -156,7 +183,7 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result
         if privacy_data.retry_count == 0 {
             privacy_data.lock_time = 30;
             warn!(
-                system_type,
+                ?system_type,
                 lock_time = privacy_data.lock_time,
                 "Account locked"
             );
@@ -173,7 +200,14 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result
 }
 
 fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
-    let system_type = request.get_param(MethodParamType::PmsTypeT)?.as_i32()?;
+    let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
+        Value::SystemType(ty) => *ty,
+        _ => {
+            return Err(CryptoengError::ParseError(
+                "Invalid system type parameter".to_string(),
+            ));
+        }
+    };
 
     // Get the challenge provided in the modify request (optional for some flows)
     let challenge = request
@@ -195,17 +229,16 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
         if !privacy_data.pending_challenge.is_empty()
             && *challenge != privacy_data.pending_challenge
         {
-            warn!(system_type, "Challenge mismatch");
+            warn!(?system_type, "Challenge mismatch");
             return Err(CryptoengError::ChallengeMismatch(system_type));
         }
     }
 
     // Update password type if provided
-    if let Ok(pwd_type) = request
-        .get_param(MethodParamType::PmsPwdTypeT)
-        .and_then(|p| p.as_i32())
+    if let Ok(pwd_type) = request.get_param(MethodParamType::PmsPwdTypeT)
+        && let Value::PasswordQuality(pwd_type) = pwd_type.value()
     {
-        privacy_data.password_type = pwd_type;
+        privacy_data.password_type = *pwd_type;
     }
 
     // Handle different info types
@@ -215,16 +248,16 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
             if let Ok(pwd_info) = request.get_param(MethodParamType::PmsInfoBufferT) {
                 privacy_data.password_hash = pwd_info.value().as_bytes().to_vec();
                 info!(
-                    system_type,
-                    password_type = privacy_data.password_type,
+                    ?system_type,
+                    password_type = ?privacy_data.password_type,
                     "Password updated"
                 );
             } else if let Ok(pwd_info) = request.get_param(MethodParamType::PmsPwdInfoT) {
                 // Fallback to old param type for compatibility
                 privacy_data.password_hash = pwd_info.value().as_bytes().to_vec();
                 info!(
-                    system_type,
-                    password_type = privacy_data.password_type,
+                    ?system_type,
+                    password_type = ?privacy_data.password_type,
                     "Password updated"
                 );
             }
@@ -240,11 +273,11 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
             if let Ok(email) = request.get_param(MethodParamType::PmsInfoBufferT) {
                 privacy_data.email =
                     String::from_utf8_lossy(&*email.value().as_bytes()).to_string();
-                info!(system_type, "Email updated");
+                info!(?system_type, "Email updated");
             }
         }
         _ => {
-            warn!(system_type, info_type = ?info_type, "Unsupported info type for modify");
+            warn!(?system_type, info_type = ?info_type, "Unsupported info type for modify");
             return Err(CryptoengError::ParseError(format!(
                 "Unsupported info type for modify: {:?}",
                 info_type
@@ -276,17 +309,30 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
 }
 
 fn handle_pms_delete(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
-    let system_type = request.get_param(MethodParamType::PmsTypeT)?.as_i32()?;
-
+    let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
+        Value::SystemType(ty) => *ty,
+        _ => {
+            return Err(CryptoengError::ParseError(
+                "Invalid system type parameter".to_string(),
+            ));
+        }
+    };
     storage.reset_privacy_data(system_type);
     storage.save()?;
 
-    info!(system_type, "Privacy data deleted");
+    info!(?system_type, "Privacy data deleted");
     Ok(ResponseBuilder::standard(request.method_type).build())
 }
 
 fn handle_pms_get_info(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
-    let system_type = request.get_param(MethodParamType::PmsTypeT)?.as_i32()?;
+    let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
+        Value::SystemType(ty) => *ty,
+        _ => {
+            return Err(CryptoengError::ParseError(
+                "Invalid system type parameter".to_string(),
+            ));
+        }
+    };
 
     let privacy_data = storage
         .get_privacy_data(system_type)
@@ -294,9 +340,9 @@ fn handle_pms_get_info(request: &StandardRequest, storage: &mut Storage) -> Resu
         .unwrap_or_default();
 
     info!(
-        system_type,
+        ?system_type,
         enrolled = privacy_data.enrolled,
-        password_type = privacy_data.password_type,
+        password_type = ?privacy_data.password_type,
         retry_count = privacy_data.retry_count,
         "GetInfo"
     );
@@ -304,7 +350,7 @@ fn handle_pms_get_info(request: &StandardRequest, storage: &mut Storage) -> Resu
     let mut builder = ResponseBuilder::standard(request.method_type)
         .add_param(Parameter::new(
             MethodParamType::PmsPwdTypeT,
-            &privacy_data.password_type.to_be_bytes(),
+            &(privacy_data.password_type as i32).to_be_bytes(),
         )?)
         .add_param(Parameter::new(
             MethodParamType::PmsPwdRetryCountLeftT,
@@ -355,11 +401,18 @@ fn handle_pms_request_encrypt_data(
 }
 
 fn handle_pms_reset_all_data(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
-    let system_type = request.get_param(MethodParamType::PmsTypeT)?.as_i32()?;
+    let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
+        Value::SystemType(ty) => *ty,
+        _ => {
+            return Err(CryptoengError::ParseError(
+                "Invalid system type parameter".to_string(),
+            ));
+        }
+    };
 
     storage.reset_privacy_data(system_type);
     storage.save()?;
 
-    info!(system_type, "All data reset");
+    info!(?system_type, "All data reset");
     Ok(ResponseBuilder::standard(request.method_type).build())
 }

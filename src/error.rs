@@ -3,7 +3,10 @@
 use std::sync::PoisonError;
 use thiserror::Error;
 
-use crate::types::{method::MethodType, parameter::MethodParamType};
+use crate::{
+    SystemType,
+    types::{method::MethodType, parameter::MethodParamType},
+};
 
 /// Result type alias for cryptoeng operations.
 pub type Result<T> = std::result::Result<T, CryptoengError>;
@@ -42,20 +45,26 @@ pub enum CryptoengError {
     UnknownNativeCommand(u8),
 
     /// User is not enrolled in the privacy management system.
-    #[error("user not enrolled for system type {0}")]
-    NotEnrolled(i32),
+    #[error("user not enrolled for system type {0:?}")]
+    NotEnrolled(SystemType),
 
     /// Account is locked due to too many failed attempts.
-    #[error("account locked for system type {system_type}, time remaining: {lock_time}s")]
-    AccountLocked { system_type: i32, lock_time: i32 },
+    #[error("account locked for system type {system_type:?}, time remaining: {lock_time}s")]
+    AccountLocked {
+        system_type: SystemType,
+        lock_time: i32,
+    },
 
     /// Password verification failed.
-    #[error("verification failed for system type {system_type}, retries left: {retries_left}")]
-    VerificationFailed { system_type: i32, retries_left: i32 },
+    #[error("verification failed for system type {system_type:?}, retries left: {retries_left}")]
+    VerificationFailed {
+        system_type: SystemType,
+        retries_left: i32,
+    },
 
     /// Challenge token mismatch during modify operation.
-    #[error("challenge mismatch for system type {0}")]
-    ChallengeMismatch(i32),
+    #[error("challenge mismatch for system type {0:?}")]
+    ChallengeMismatch(SystemType),
 
     /// No verify buffer provided when required.
     #[error("no verify buffer provided")]

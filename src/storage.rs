@@ -2,7 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, path::PathBuf};
 use tracing::info;
 
-use crate::error::{Result, StorageError};
+use crate::{
+    PasswordQuality, SystemType,
+    error::{Result, StorageError},
+};
 
 /// Storage directory for persistent data
 pub const STORAGE_DIR: &str = "/data/vendor/cryptoeng";
@@ -10,7 +13,7 @@ pub const STORAGE_DIR: &str = "/data/vendor/cryptoeng";
 /// Stored privacy data for a system type
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrivacyData {
-    pub password_type: i32,
+    pub password_type: PasswordQuality,
     pub password_hash: Vec<u8>,
     pub email: String,
     pub handler: Vec<u8>,
@@ -83,12 +86,12 @@ impl Storage {
         Ok(())
     }
 
-    pub fn get_privacy_data(&self, system_type: i32) -> Option<&PrivacyData> {
-        self.privacy_data.get(&system_type)
+    pub fn get_privacy_data(&self, system_type: SystemType) -> Option<&PrivacyData> {
+        self.privacy_data.get(&(system_type as i32))
     }
 
-    pub fn get_privacy_data_mut(&mut self, system_type: i32) -> &mut PrivacyData {
-        self.privacy_data.entry(system_type).or_default()
+    pub fn get_privacy_data_mut(&mut self, system_type: SystemType) -> &mut PrivacyData {
+        self.privacy_data.entry(system_type as i32).or_default()
     }
 
     pub fn get_password_data(&self, user_id: i32) -> Option<&PasswordData> {
@@ -125,7 +128,7 @@ impl Storage {
         self.secrets.insert(length, secret);
     }
 
-    pub fn reset_privacy_data(&mut self, system_type: i32) {
-        self.privacy_data.remove(&system_type);
+    pub fn reset_privacy_data(&mut self, system_type: SystemType) {
+        self.privacy_data.remove(&(system_type as i32));
     }
 }

@@ -163,9 +163,10 @@ impl From<i32> for MethodParamType {
 }
 
 /// Password quality/complexity type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[repr(i32)]
 pub enum PasswordQuality {
+    #[default]
     Unspecified = 0,
     NumericFour = 1,
     NumericSix = 2,
