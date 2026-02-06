@@ -1,9 +1,9 @@
 mod error;
 mod handlers;
-mod method;
 mod request;
 mod response;
 mod storage;
+mod types;
 mod utils;
 
 use rsbinder::*;
@@ -16,6 +16,7 @@ pub use crate::error::{CryptoengError, Result, StorageError};
 use crate::request::Request;
 use crate::response::ResponseBuilder;
 use crate::storage::Storage;
+pub use crate::types::parameter::{PasswordQuality, SystemType, VerifyType, CHALLENGE_LENGTH};
 pub use crate::vendor::oplus::hardware::cryptoeng::ICryptoeng::BnCryptoeng;
 pub use crate::vendor::oplus::hardware::cryptoeng::ICryptoeng::ICryptoeng;
 
@@ -93,9 +94,10 @@ mod tests {
     use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
     use crate::{
-        method::{MethodParamType, MethodType, Parameter},
         request::NativeCommand,
         response::ResponseBuilder,
+        types::method::MethodType,
+        types::parameter::{MethodParamType, Parameter},
     };
 
     use super::*;
@@ -144,7 +146,7 @@ mod tests {
     fn test_response_builder() {
         let response = ResponseBuilder::standard(MethodType::CeCmdPmsGetInfo)
             .result_code(0)
-            .add_param(Parameter::from_i32(MethodParamType::PmsPwdTypeT, 1))
+            .add_param(Parameter::from_i32(MethodParamType::PmsPwdTypeT, 1).unwrap())
             .build();
 
         // Check header

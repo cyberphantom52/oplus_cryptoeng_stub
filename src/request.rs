@@ -6,9 +6,10 @@ use tracing::{debug, info, warn};
 use crate::{
     error::{CryptoengError, Result},
     handlers,
-    method::{MethodParamType, MethodType, Parameter},
     response::ResponseBuilder,
     storage::Storage,
+    types::method::MethodType,
+    types::parameter::{MethodParamType, Parameter},
 };
 
 /// Request type enum
@@ -51,12 +52,12 @@ impl fmt::Display for StandardRequest {
         if !self.params.is_empty() {
             write!(f, " {{")?;
             let mut first = true;
-            for (k, v) in &self.params {
+            for (_, v) in &self.params {
                 if !first {
                     write!(f, ",")?;
                 }
                 first = false;
-                write!(f, " {:?}={}", k, v)?;
+                write!(f, " {}", v)?;
             }
             write!(f, " }}")?;
         }
@@ -122,7 +123,7 @@ impl TryFrom<&[u8]> for StandardRequest {
             offset += param_len;
 
             let param_type = MethodParamType::from(param_type_code);
-            let parameter = Parameter::new(param_type, param_data);
+            let parameter = Parameter::new(param_type, param_data)?;
 
             params.insert(param_type, parameter);
         }

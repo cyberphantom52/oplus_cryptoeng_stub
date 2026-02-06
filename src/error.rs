@@ -3,7 +3,7 @@
 use std::sync::PoisonError;
 use thiserror::Error;
 
-use crate::method::{MethodParamType, MethodType};
+use crate::types::{method::MethodType, parameter::MethodParamType};
 
 /// Result type alias for cryptoeng operations.
 pub type Result<T> = std::result::Result<T, CryptoengError>;
@@ -19,13 +19,19 @@ pub enum CryptoengError {
     #[error("missing required parameter: {0:?}")]
     MissingParameter(MethodParamType),
 
-    /// Parameter has invalid data (e.g., wrong size for i32).
-    #[error("invalid parameter data for {param:?}: expected at least {expected} bytes, got {got}")]
-    InvalidParameterData {
+    /// Parameter buffer is too short to parse.
+    #[error(
+        "parameter buffer too short for {param:?}: expected at least {expected} bytes, got {got}"
+    )]
+    ParameterBufferTooShort {
         param: MethodParamType,
         expected: usize,
         got: usize,
     },
+
+    /// Parameter contains an unknown/unsupported value.
+    #[error("invalid parameter value {value} for {param:?}")]
+    InvalidParameterData { param: MethodParamType, value: i32 },
 
     /// Unknown or unsupported method type.
     #[error("unknown method type: {0:?}")]
@@ -109,6 +115,7 @@ impl CryptoengError {
         match self {
             CryptoengError::BufferTooShort { .. } => -1,
             CryptoengError::MissingParameter(_) => -2,
+            CryptoengError::ParameterBufferTooShort { .. } => -3,
             CryptoengError::InvalidParameterData { .. } => -3,
             CryptoengError::UnknownMethod(_) => -4,
             CryptoengError::UnknownNativeCommand(_) => -5,

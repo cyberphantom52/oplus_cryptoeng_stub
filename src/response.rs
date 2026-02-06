@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
-use crate::method::{MethodType, Parameter};
+use crate::types::{method::MethodType, parameter::Parameter};
 
 /// Marker type for standard response format (cmdId > 100)
 pub struct Standard;

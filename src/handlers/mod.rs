@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::error::{CryptoengError, Result};
-use crate::method::MethodType;
 use crate::request::StandardRequest;
 use crate::storage::Storage;
+use crate::types::method::MethodType;
 
 mod pms;
 
