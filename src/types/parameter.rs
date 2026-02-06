@@ -311,7 +311,7 @@ impl TryFrom<&[u8]> for SecureBuffer {
 pub enum Value {
     SystemType(SystemType),
     PasswordQuality(PasswordQuality),
-    VerifyType(InfoType),
+    InfoType(InfoType),
     SecureBuffer(SecureBuffer),
     Integer(i32),
     Boolean(bool),
@@ -324,7 +324,7 @@ impl std::fmt::Display for Value {
         match self {
             Value::SystemType(t) => write!(f, "{:?}", t),
             Value::PasswordQuality(q) => write!(f, "{:?}", q),
-            Value::VerifyType(v) => write!(f, "{:?}", v),
+            Value::InfoType(v) => write!(f, "{:?}", v),
             Value::Integer(i) => write!(f, "{}", i),
             Value::Boolean(b) => write!(f, "{}", b),
             Value::String(s) => write!(f, "{}", s),
@@ -354,7 +354,9 @@ impl Value {
             MethodParamType::PmsPwdTypeT => {
                 Ok(Value::PasswordQuality(PasswordQuality::try_from(buf)?))
             }
-            MethodParamType::PmsVerifyTypeT => Ok(Value::VerifyType(InfoType::try_from(buf)?)),
+            MethodParamType::PmsVerifyTypeT | MethodParamType::PmsInfoTypeT => {
+                Ok(Value::InfoType(InfoType::try_from(buf)?))
+            }
             MethodParamType::PmsHideEmailT => {
                 if buf.len() == 4 {
                     // Incoming requests: boolean flag (0 or 1)
@@ -398,7 +400,7 @@ impl Value {
                 BigEndian::write_i32(&mut buf, *q as i32);
                 Cow::Owned(buf.to_vec())
             }
-            Value::VerifyType(v) => {
+            Value::InfoType(v) => {
                 let mut buf = [0u8; 4];
                 BigEndian::write_i32(&mut buf, *v as i32);
                 Cow::Owned(buf.to_vec())

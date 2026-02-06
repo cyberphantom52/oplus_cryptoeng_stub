@@ -37,7 +37,7 @@ fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Result
         Value::PasswordQuality(q) => *q,
         _ => {
             return Err(CryptoengError::ParseError(
-                "Invalid system type parameter".to_string(),
+                "Invalid password type parameter".to_string(),
             ));
         }
     };
@@ -102,10 +102,10 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result
     };
 
     let verify_type = match request.get_param(MethodParamType::PmsVerifyTypeT)?.value() {
-        Value::VerifyType(ty) => *ty,
+        Value::InfoType(ty) => *ty,
         _ => {
             return Err(CryptoengError::ParseError(
-                "Invalid system type parameter".to_string(),
+                "Invalid verify info type parameter".to_string(),
             ));
         }
     };
@@ -214,13 +214,14 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
         .get_param(MethodParamType::PmsChallengeT)
         .map(|p| p.value().as_bytes());
 
-    // Get the info type to determine what we're modifying
-    let info_type = InfoType::try_from(
-        &*request
-            .get_param(MethodParamType::PmsInfoTypeT)?
-            .value()
-            .as_bytes(),
-    )?;
+    let info_type = match request.get_param(MethodParamType::PmsInfoTypeT)?.value() {
+        Value::InfoType(ty) => *ty,
+        _ => {
+            return Err(CryptoengError::ParseError(
+                "Invalid info type parameter".to_string(),
+            ));
+        }
+    };
 
     let privacy_data = storage.get_privacy_data_mut(system_type);
 
@@ -244,32 +245,20 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
     // Handle different info types
     match info_type {
         InfoType::Password => {
-            // Password modification - read from PmsInfoBufferT (208)
-            if let Ok(pwd_info) = request.get_param(MethodParamType::PmsInfoBufferT) {
-                privacy_data.password_hash = pwd_info.value().as_bytes().to_vec();
-                info!(
-                    ?system_type,
-                    password_type = ?privacy_data.password_type,
-                    "Password updated"
-                );
-            } else if let Ok(pwd_info) = request.get_param(MethodParamType::PmsPwdInfoT) {
-                // Fallback to old param type for compatibility
-                privacy_data.password_hash = pwd_info.value().as_bytes().to_vec();
-                info!(
-                    ?system_type,
-                    password_type = ?privacy_data.password_type,
-                    "Password updated"
-                );
-            }
+            let pwd_info = request.get_param(MethodParamType::PmsInfoBufferT)?;
+            privacy_data.password_hash = pwd_info.value().as_bytes().to_vec();
+            info!(
+                ?system_type,
+                password_type = ?privacy_data.password_type,
+                "Password updated"
+            );
         }
         InfoType::SecurityQuestion => {
-            // Security answer modification
-            if let Ok(_answer_info) = request.get_param(MethodParamType::PmsInfoBufferT) {
-                unimplemented!("Storing security answer not implemented")
-            }
+            tracing::error!("Storing security answer not implemented")
+            // if let Ok(_answer_info) = request.get_param(MethodParamType::PmsInfoBufferT) {
+            // }
         }
         InfoType::Email => {
-            // Email modification
             if let Ok(email) = request.get_param(MethodParamType::PmsInfoBufferT) {
                 privacy_data.email =
                     String::from_utf8_lossy(&*email.value().as_bytes()).to_string();
