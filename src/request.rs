@@ -141,12 +141,6 @@ impl TryFrom<&[u8]> for StandardRequest {
 
 impl StandardRequest {
     pub fn handle(&self, storage: &mut Storage) -> Result<Vec<u8>> {
-        info!(
-            command = ?self.method_type,
-            code = self.method_type.code(),
-            "Handling command"
-        );
-
         // Try to dispatch to a registered handler
         handlers::dispatch(self, storage)
     }
