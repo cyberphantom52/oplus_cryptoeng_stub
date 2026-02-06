@@ -5,7 +5,7 @@ use crate::error::{CryptoengError, Result};
 use crate::register_handler;
 use crate::request::StandardRequest;
 use crate::response::ResponseBuilder;
-use crate::storage::Storage;
+use crate::storage::{RuntimeState, Storage};
 use crate::types::method::MethodType;
 use crate::types::parameter::{InfoType, MethodParamType, Parameter, Value};
 use crate::utils::generate_random_bytes;
@@ -21,7 +21,11 @@ register_handler!(
 );
 register_handler!(MethodType::CeCmdPmsResetAllData, handle_pms_reset_all_data);
 
-fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
+fn handle_pms_enroll(
+    request: &StandardRequest,
+    storage: &mut Storage,
+    _runtime: &mut RuntimeState,
+) -> Result<Vec<u8>> {
     let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
         Value::SystemType(ty) => *ty,
         _ => {
@@ -79,7 +83,7 @@ fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Result
     privacy_data.handler = generate_random_bytes(8);
     privacy_data.enrolled = true;
     privacy_data.retry_count = 5;
-    privacy_data.lock_time = 0;
+    privacy_data.lock_until = None;
 
     info!(?system_type, ?password_type, "User enrolled");
 
@@ -91,7 +95,11 @@ fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Result
         .build())
 }
 
-fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
+fn handle_pms_verify(
+    request: &StandardRequest,
+    storage: &mut Storage,
+    runtime: &mut RuntimeState,
+) -> Result<Vec<u8>> {
     let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
         Value::SystemType(ty) => *ty,
         _ => {
@@ -112,16 +120,17 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result
 
     let privacy_data = storage.get_privacy_data_mut(system_type);
 
-    // Check if locked
-    if privacy_data.lock_time > 0 {
+    // Check if locked using the new method
+    if privacy_data.is_locked() {
+        let lock_time = privacy_data.lock_time_remaining();
         warn!(
             ?system_type,
-            lock_time = privacy_data.lock_time,
+            lock_time,
             "Account is locked"
         );
         return Err(CryptoengError::AccountLocked {
             system_type,
-            lock_time: privacy_data.lock_time,
+            lock_time,
         });
     }
 
@@ -155,13 +164,10 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result
         privacy_data.retry_count = 5;
 
         // Generate new handler to be used after successful modify
-        // We store it as pending and DON'T update the actual handler yet
-        // This allows subsequent verify calls to still work with the old handler
         let new_handler = generate_random_bytes(8);
 
-        // Store challenge and new handler as pending - DON'T update actual handler yet
-        privacy_data.pending_challenge = challenge.clone();
-        privacy_data.pending_handler = new_handler.clone();
+        // Store challenge and new handler in RuntimeState (not persisted)
+        runtime.set_pending(system_type, challenge.clone(), new_handler.clone());
 
         storage.save()?;
 
@@ -181,10 +187,10 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result
 
         // Lock account if no retries left
         if privacy_data.retry_count == 0 {
-            privacy_data.lock_time = 30;
+            privacy_data.set_lock(30);
             warn!(
                 ?system_type,
-                lock_time = privacy_data.lock_time,
+                lock_time = 30,
                 "Account locked"
             );
         }
@@ -199,7 +205,11 @@ fn handle_pms_verify(request: &StandardRequest, storage: &mut Storage) -> Result
     }
 }
 
-fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
+fn handle_pms_modify(
+    request: &StandardRequest,
+    storage: &mut Storage,
+    runtime: &mut RuntimeState,
+) -> Result<Vec<u8>> {
     let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
         Value::SystemType(ty) => *ty,
         _ => {
@@ -223,17 +233,18 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
         }
     };
 
-    let privacy_data = storage.get_privacy_data_mut(system_type);
-
     // Validate challenge if one was provided and we have a pending one
+    let pending = runtime.get_pending(system_type);
     if let Ok(challenge) = &challenge {
-        if !privacy_data.pending_challenge.is_empty()
-            && *challenge != privacy_data.pending_challenge
-        {
-            warn!(?system_type, "Challenge mismatch");
-            return Err(CryptoengError::ChallengeMismatch(system_type));
+        if let Some(pending) = pending {
+            if *challenge != pending.challenge {
+                warn!(?system_type, "Challenge mismatch");
+                return Err(CryptoengError::ChallengeMismatch(system_type));
+            }
         }
     }
+
+    let privacy_data = storage.get_privacy_data_mut(system_type);
 
     // Update password type if provided
     if let Ok(pwd_type) = request.get_param(MethodParamType::PmsPwdTypeT)
@@ -274,14 +285,10 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
         }
     }
 
-    // Update the handler to the pending handler (generated during verify)
-    // and clear the pending state
-    let new_handler = if !privacy_data.pending_handler.is_empty() {
-        let handler = privacy_data.pending_handler.clone();
-        privacy_data.handler = handler.clone();
-        privacy_data.pending_handler.clear();
-        privacy_data.pending_challenge.clear();
-        handler
+    // Take the pending verification from runtime state and update handler
+    let new_handler = if let Some(pending) = runtime.take_pending(system_type) {
+        privacy_data.handler = pending.pending_handler.clone();
+        pending.pending_handler
     } else {
         // Generate a new handler if no pending one exists
         let handler = generate_random_bytes(8);
@@ -297,7 +304,11 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
         .build())
 }
 
-fn handle_pms_delete(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
+fn handle_pms_delete(
+    request: &StandardRequest,
+    storage: &mut Storage,
+    _runtime: &mut RuntimeState,
+) -> Result<Vec<u8>> {
     let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
         Value::SystemType(ty) => *ty,
         _ => {
@@ -313,7 +324,11 @@ fn handle_pms_delete(request: &StandardRequest, storage: &mut Storage) -> Result
     Ok(ResponseBuilder::standard(request.method_type).build())
 }
 
-fn handle_pms_get_info(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
+fn handle_pms_get_info(
+    request: &StandardRequest,
+    storage: &mut Storage,
+    _runtime: &mut RuntimeState,
+) -> Result<Vec<u8>> {
     let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
         Value::SystemType(ty) => *ty,
         _ => {
@@ -347,7 +362,7 @@ fn handle_pms_get_info(request: &StandardRequest, storage: &mut Storage) -> Resu
         )?)
         .add_param(Parameter::new(
             MethodParamType::PmsPwdLockTimeLeftT,
-            &privacy_data.lock_time.to_be_bytes(),
+            &privacy_data.lock_time_remaining().to_be_bytes(),
         )?)
         .add_param(Parameter::new(
             MethodParamType::PmsSecureQuestionRetryCountLeftT,
@@ -355,7 +370,7 @@ fn handle_pms_get_info(request: &StandardRequest, storage: &mut Storage) -> Resu
         )?)
         .add_param(Parameter::new(
             MethodParamType::PmsSecureQuestionLockTimeLeftT,
-            &privacy_data.secure_question_lock_time.to_be_bytes(),
+            &privacy_data.secure_question_lock_time_remaining().to_be_bytes(),
         )?);
 
     if !privacy_data.handler.is_empty() {
@@ -378,6 +393,7 @@ fn handle_pms_get_info(request: &StandardRequest, storage: &mut Storage) -> Resu
 fn handle_pms_request_encrypt_data(
     request: &StandardRequest,
     _storage: &mut Storage,
+    _runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
     let encrypted_data = request.get_param(MethodParamType::PmsInfoBufferT)?;
 
@@ -389,7 +405,11 @@ fn handle_pms_request_encrypt_data(
         .build())
 }
 
-fn handle_pms_reset_all_data(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
+fn handle_pms_reset_all_data(
+    request: &StandardRequest,
+    storage: &mut Storage,
+    _runtime: &mut RuntimeState,
+) -> Result<Vec<u8>> {
     let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
         Value::SystemType(ty) => *ty,
         _ => {

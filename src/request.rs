@@ -7,7 +7,7 @@ use crate::{
     error::{CryptoengError, Result},
     handlers,
     response::ResponseBuilder,
-    storage::Storage,
+    storage::{RuntimeState, Storage},
     types::method::MethodType,
     types::parameter::{MethodParamType, Parameter},
 };
@@ -140,9 +140,9 @@ impl TryFrom<&[u8]> for StandardRequest {
 }
 
 impl StandardRequest {
-    pub fn handle(&self, storage: &mut Storage) -> Result<Vec<u8>> {
+    pub fn handle(&self, storage: &mut Storage, runtime: &mut RuntimeState) -> Result<Vec<u8>> {
         // Try to dispatch to a registered handler
-        handlers::dispatch(self, storage)
+        handlers::dispatch(self, storage, runtime)
     }
 
     /// Get a parameter by type

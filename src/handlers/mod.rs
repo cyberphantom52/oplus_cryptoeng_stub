@@ -3,13 +3,13 @@ use std::sync::OnceLock;
 
 use crate::error::{CryptoengError, Result};
 use crate::request::StandardRequest;
-use crate::storage::Storage;
+use crate::storage::{RuntimeState, Storage};
 use crate::types::method::MethodType;
 
 mod pms;
 
 /// Handler function type for standard requests
-pub type HandlerFn = fn(&StandardRequest, &mut Storage) -> Result<Vec<u8>>;
+pub type HandlerFn = fn(&StandardRequest, &mut Storage, &mut RuntimeState) -> Result<Vec<u8>>;
 
 /// Entry for registering a handler with the inventory system
 pub struct HandlerEntry {
@@ -32,12 +32,12 @@ fn get_registry() -> &'static HashMap<i32, HandlerFn> {
     })
 }
 
-pub fn dispatch(request: &StandardRequest, storage: &mut Storage) -> Result<Vec<u8>> {
+pub fn dispatch(request: &StandardRequest, storage: &mut Storage, runtime: &mut RuntimeState) -> Result<Vec<u8>> {
     let registry = get_registry();
     let code = request.method_type.code();
 
     match registry.get(&code) {
-        Some(handler) => handler(request, storage),
+        Some(handler) => handler(request, storage, runtime),
         None => Err(CryptoengError::UnknownMethod(request.method_type)),
     }
 }

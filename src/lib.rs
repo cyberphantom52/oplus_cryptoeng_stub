@@ -15,7 +15,7 @@ include!(concat!(env!("OUT_DIR"), "/cryptoeng.rs"));
 pub use crate::error::{CryptoengError, Result, StorageError};
 use crate::request::Request;
 use crate::response::ResponseBuilder;
-use crate::storage::Storage;
+use crate::storage::{RuntimeState, Storage};
 pub use crate::types::parameter::{InfoType, PasswordQuality, SystemType, CHALLENGE_LENGTH};
 pub use crate::vendor::oplus::hardware::cryptoeng::ICryptoeng::BnCryptoeng;
 pub use crate::vendor::oplus::hardware::cryptoeng::ICryptoeng::ICryptoeng;
@@ -31,12 +31,14 @@ const BUFFER_SIZE: i32 = 10000;
 /// Main cryptoeng service with storage backend
 pub struct CryptoengService {
     storage: Arc<RwLock<Storage>>,
+    runtime: Arc<RwLock<RuntimeState>>,
 }
 
 impl CryptoengService {
     pub fn new() -> Self {
         Self {
             storage: Arc::new(RwLock::new(Storage::load())),
+            runtime: Arc::new(RwLock::new(RuntimeState::new())),
         }
     }
 
@@ -44,9 +46,10 @@ impl CryptoengService {
         let parsed = Request::parse(request)?;
 
         let mut storage = self.storage.write()?;
+        let mut runtime = self.runtime.write()?;
 
         match parsed {
-            Request::Standard(req) => req.handle(&mut storage),
+            Request::Standard(req) => req.handle(&mut storage, &mut runtime),
             Request::Native(req) => req.handle(&mut storage),
         }
     }
@@ -129,11 +132,11 @@ mod tests {
         request.extend_from_slice(&201i32.to_be_bytes());
         // Param length = 4
         request.extend_from_slice(&4i32.to_be_bytes());
-        // Param data = 0
-        request.extend_from_slice(&0i32.to_be_bytes());
+        // Param data = 1 (PrivacyPassword)
+        request.extend_from_slice(&1i32.to_be_bytes());
 
         let parsed = Request::parse(&request);
-        assert!(parsed.is_ok());
+        assert!(parsed.is_ok(), "Parse failed: {:?}", parsed);
         if let Ok(Request::Standard(req)) = parsed {
             assert_eq!(req.method_type, MethodType::CeCmdPmsGetInfo);
             assert_eq!(req.params.len(), 1);
