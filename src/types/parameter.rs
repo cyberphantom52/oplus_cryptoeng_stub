@@ -26,18 +26,6 @@ impl Parameter {
         &self.value
     }
 
-    /// Try to read the data as a big-endian i32
-    pub fn as_i32(&self) -> Result<i32> {
-        if self.value.as_bytes().len() < 4 {
-            return Err(CryptoengError::ParameterBufferTooShort {
-                param: self.ty,
-                expected: 4,
-                got: self.value.as_bytes().len(),
-            });
-        }
-        Ok(BigEndian::read_i32(&self.value.as_bytes()))
-    }
-
     /// Serialize the parameter to big-endian bytes (type + length + data)
     pub fn to_be_bytes(&self) -> Vec<u8> {
         let data_bytes = self.value.as_bytes();
