@@ -16,7 +16,7 @@ pub use crate::error::{CryptoengError, Result, StorageError};
 use crate::request::Request;
 use crate::response::ResponseBuilder;
 use crate::storage::Storage;
-pub use crate::types::parameter::{PasswordQuality, SystemType, VerifyType, CHALLENGE_LENGTH};
+pub use crate::types::parameter::{InfoType, PasswordQuality, SystemType, CHALLENGE_LENGTH};
 pub use crate::vendor::oplus::hardware::cryptoeng::ICryptoeng::BnCryptoeng;
 pub use crate::vendor::oplus::hardware::cryptoeng::ICryptoeng::ICryptoeng;
 

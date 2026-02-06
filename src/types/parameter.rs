@@ -162,39 +162,6 @@ impl From<i32> for MethodParamType {
     }
 }
 
-/// Info type for PMS modify operations
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(i32)]
-pub enum InfoType {
-    Password = 1,
-    SecurityAnswer = 2,
-    Email = 4,
-}
-
-impl TryFrom<&[u8]> for InfoType {
-    type Error = CryptoengError;
-
-    fn try_from(value: &[u8]) -> Result<Self> {
-        if value.len() < 4 {
-            return Err(CryptoengError::ParameterBufferTooShort {
-                param: MethodParamType::PmsInfoTypeT,
-                expected: 4,
-                got: value.len(),
-            });
-        }
-        let code = BigEndian::read_i32(value);
-        match code {
-            1 => Ok(InfoType::Password),
-            2 => Ok(InfoType::SecurityAnswer),
-            4 => Ok(InfoType::Email),
-            _ => Err(CryptoengError::InvalidParameterData {
-                param: MethodParamType::PmsInfoTypeT,
-                value: code,
-            }),
-        }
-    }
-}
-
 /// Password quality/complexity type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(i32)]
@@ -237,7 +204,7 @@ impl TryFrom<&[u8]> for PasswordQuality {
 /// Verification method type (PmsVerify).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(i32)]
-pub enum VerifyType {
+pub enum InfoType {
     Unspecified = 0,
     Password = 1,
     SecurityQuestion = 2,
@@ -249,7 +216,7 @@ pub enum VerifyType {
     EmailEx1 = 10,
 }
 
-impl TryFrom<&[u8]> for VerifyType {
+impl TryFrom<&[u8]> for InfoType {
     type Error = CryptoengError;
 
     fn try_from(value: &[u8]) -> Result<Self> {
@@ -262,15 +229,15 @@ impl TryFrom<&[u8]> for VerifyType {
         }
         let code = BigEndian::read_i32(value);
         match code {
-            0 => Ok(VerifyType::Unspecified),
-            1 => Ok(VerifyType::Password),
-            2 => Ok(VerifyType::SecurityQuestion),
-            3 => Ok(VerifyType::Account),
-            4 => Ok(VerifyType::Email),
-            5 => Ok(VerifyType::Fingerprint),
-            6 => Ok(VerifyType::Face),
-            7 => Ok(VerifyType::Iris),
-            10 => Ok(VerifyType::EmailEx1),
+            0 => Ok(InfoType::Unspecified),
+            1 => Ok(InfoType::Password),
+            2 => Ok(InfoType::SecurityQuestion),
+            3 => Ok(InfoType::Account),
+            4 => Ok(InfoType::Email),
+            5 => Ok(InfoType::Fingerprint),
+            6 => Ok(InfoType::Face),
+            7 => Ok(InfoType::Iris),
+            10 => Ok(InfoType::EmailEx1),
             _ => Err(CryptoengError::InvalidParameterData {
                 param: MethodParamType::PmsVerifyTypeT,
                 value: code,
@@ -311,10 +278,52 @@ impl TryFrom<&[u8]> for SystemType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecureBufferEntry {
+    pub ty: InfoType,
+    pub value: Value,
+}
+
+impl SecureBufferEntry {
+    const SIZE: usize = 32;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecureBuffer {
+    pub entries: Vec<SecureBufferEntry>,
+}
+
+impl TryFrom<&[u8]> for SecureBuffer {
+    type Error = CryptoengError;
+
+    fn try_from(value: &[u8]) -> Result<Self> {
+        let mut offset = 0;
+        let mut entries = Vec::new();
+        while offset + 8 + SecureBufferEntry::SIZE <= value.len() {
+            let entry_type = InfoType::try_from(&value[offset..offset + 4])?;
+            let entry_len = BigEndian::read_i32(&value[offset + 4..offset + 8]) as usize;
+            offset += 8;
+
+            let actual_len = entry_len.min(SecureBufferEntry::SIZE);
+            let data = Value::String(
+                String::from_utf8_lossy(&value[offset..offset + actual_len]).to_string(),
+            );
+            offset += SecureBufferEntry::SIZE;
+
+            entries.push(SecureBufferEntry {
+                ty: entry_type,
+                value: data,
+            });
+        }
+        Ok(SecureBuffer { entries })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     SystemType(SystemType),
     PasswordQuality(PasswordQuality),
-    VerifyType(VerifyType),
+    VerifyType(InfoType),
+    SecureBuffer(SecureBuffer),
     Integer(i32),
     Boolean(bool),
     String(String),
@@ -330,6 +339,13 @@ impl std::fmt::Display for Value {
             Value::Integer(i) => write!(f, "{}", i),
             Value::Boolean(b) => write!(f, "{}", b),
             Value::String(s) => write!(f, "{}", s),
+            Value::SecureBuffer(buf) => {
+                write!(f, "SecureBuffer {{")?;
+                for entry in &buf.entries {
+                    write!(f, "\n  {:?}", entry)?;
+                }
+                write!(f, "\n}}")
+            }
             Value::Buffer(buf) => write!(
                 f,
                 "[{}]",
@@ -349,7 +365,7 @@ impl Value {
             MethodParamType::PmsPwdTypeT => {
                 Ok(Value::PasswordQuality(PasswordQuality::try_from(buf)?))
             }
-            MethodParamType::PmsVerifyTypeT => Ok(Value::VerifyType(VerifyType::try_from(buf)?)),
+            MethodParamType::PmsVerifyTypeT => Ok(Value::VerifyType(InfoType::try_from(buf)?)),
             MethodParamType::PmsHideEmailT => {
                 if buf.len() == 4 {
                     // Incoming requests: boolean flag (0 or 1)
@@ -373,6 +389,9 @@ impl Value {
                     });
                 }
                 Ok(Value::Integer(BigEndian::read_i32(buf)))
+            }
+            MethodParamType::PmsSecureInfoBufferT => {
+                Ok(Value::SecureBuffer(SecureBuffer::try_from(buf)?))
             }
             _ => Ok(Value::Buffer(buf.to_vec())),
         }
@@ -404,6 +423,25 @@ impl Value {
                 let mut buf = [0u8; 4];
                 BigEndian::write_i32(&mut buf, if *b { 1 } else { 0 });
                 Cow::Owned(buf.to_vec())
+            }
+            Value::SecureBuffer(buf) => {
+                let mut result = Vec::new();
+                for entry in &buf.entries {
+                    let mut entry_buf = [0u8; 4];
+                    BigEndian::write_i32(&mut entry_buf, entry.ty as i32);
+                    result.extend_from_slice(&entry_buf);
+
+                    let value_bytes = entry.value.as_bytes();
+                    let actual_len = value_bytes.len().min(SecureBufferEntry::SIZE);
+                    let mut len_buf = [0u8; 4];
+                    BigEndian::write_i32(&mut len_buf, actual_len as i32);
+                    result.extend_from_slice(&len_buf);
+
+                    let mut data_buf = [0u8; SecureBufferEntry::SIZE];
+                    data_buf[..actual_len].copy_from_slice(&value_bytes[..actual_len]);
+                    result.extend_from_slice(&data_buf);
+                }
+                Cow::Owned(result)
             }
             Value::String(s) => Cow::Borrowed(s.as_bytes()),
             Value::Buffer(buf) => Cow::Borrowed(buf),

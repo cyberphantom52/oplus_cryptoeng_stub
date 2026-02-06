@@ -7,7 +7,7 @@ use crate::request::StandardRequest;
 use crate::response::ResponseBuilder;
 use crate::storage::Storage;
 use crate::types::method::MethodType;
-use crate::types::parameter::{InfoType, MethodParamType, Parameter};
+use crate::types::parameter::{InfoType, MethodParamType, Parameter, Value};
 use crate::utils::generate_random_bytes;
 
 register_handler!(MethodType::CeCmdPmsEnroll, handle_pms_enroll);
@@ -33,9 +33,32 @@ fn handle_pms_enroll(request: &StandardRequest, storage: &mut Storage) -> Result
     let pwd_info = request.get_param(MethodParamType::PmsPwdInfoT)?;
     privacy_data.password_hash = pwd_info.value().as_bytes().to_vec();
 
-    // Get email (optional)
-    if let Ok(email) = request.get_param(MethodParamType::PmsHideEmailT) {
-        privacy_data.email = String::from_utf8_lossy(&*email.value().as_bytes()).to_string();
+    // Parse email from PmsSecureInfoBufferT if present
+    if let Ok(secure_info) = request.get_param(MethodParamType::PmsSecureInfoBufferT)
+        && let Value::SecureBuffer(secure_buffer) = secure_info.value()
+    {
+        let mut email_first: Option<String> = None;
+        let mut email_continuation: Option<String> = None;
+
+        for entry in secure_buffer.entries.iter() {
+            match (&entry.ty, &entry.value) {
+                (InfoType::Email, Value::String(s)) => {
+                    email_first = Some(s.trim_end_matches('\0').to_string());
+                }
+                (InfoType::EmailEx1, Value::String(s)) => {
+                    email_continuation = Some(s.trim_end_matches('\0').to_string());
+                }
+                _ => continue,
+            }
+        }
+
+        if let Some(first) = email_first {
+            privacy_data.email = match email_continuation {
+                Some(cont) => format!("{}{}", first, cont),
+                None => first,
+            };
+            info!(system_type, email = %privacy_data.email, "Email saved during enroll");
+        }
     }
 
     // Generate a handler token (must be exactly 8 bytes for password verification)
@@ -206,7 +229,7 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
                 );
             }
         }
-        InfoType::SecurityAnswer => {
+        InfoType::SecurityQuestion => {
             // Security answer modification
             if let Ok(_answer_info) = request.get_param(MethodParamType::PmsInfoBufferT) {
                 unimplemented!("Storing security answer not implemented")
@@ -219,6 +242,13 @@ fn handle_pms_modify(request: &StandardRequest, storage: &mut Storage) -> Result
                     String::from_utf8_lossy(&*email.value().as_bytes()).to_string();
                 info!(system_type, "Email updated");
             }
+        }
+        _ => {
+            warn!(system_type, info_type = ?info_type, "Unsupported info type for modify");
+            return Err(CryptoengError::ParseError(format!(
+                "Unsupported info type for modify: {:?}",
+                info_type
+            )));
         }
     }
 
