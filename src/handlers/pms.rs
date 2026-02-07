@@ -3,7 +3,7 @@ use tracing::{info, warn};
 
 use crate::error::{CryptoengError, Result};
 use crate::register_handler;
-use crate::request::StandardRequest;
+use crate::request::CryptoengRequest;
 use crate::response::ResponseBuilder;
 use crate::storage::{RuntimeState, Storage};
 use crate::types::method::MethodType;
@@ -22,7 +22,7 @@ register_handler!(
 register_handler!(MethodType::CeCmdPmsResetAllData, handle_pms_reset_all_data);
 
 fn handle_pms_enroll(
-    request: &StandardRequest,
+    request: &dyn CryptoengRequest,
     storage: &mut Storage,
     _runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
@@ -90,13 +90,13 @@ fn handle_pms_enroll(
     let handler = privacy_data.handler.clone();
     storage.save()?;
 
-    Ok(ResponseBuilder::standard(request.method_type)
+    Ok(ResponseBuilder::standard(request.method_type())
         .add_param(Parameter::new(MethodParamType::PmsHandlerT, &handler)?)
         .build())
 }
 
 fn handle_pms_verify(
-    request: &StandardRequest,
+    request: &dyn CryptoengRequest,
     storage: &mut Storage,
     runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
@@ -171,7 +171,7 @@ fn handle_pms_verify(
 
         storage.save()?;
 
-        Ok(ResponseBuilder::standard(request.method_type)
+        Ok(ResponseBuilder::standard(request.method_type())
             .add_param(Parameter::new(MethodParamType::PmsChallengeT, &challenge)?)
             .add_param(Parameter::new(MethodParamType::PmsHandlerT, &new_handler)?)
             .build())
@@ -206,7 +206,7 @@ fn handle_pms_verify(
 }
 
 fn handle_pms_modify(
-    request: &StandardRequest,
+    request: &dyn CryptoengRequest,
     storage: &mut Storage,
     runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
@@ -299,13 +299,13 @@ fn handle_pms_modify(
     storage.save()?;
 
     // Return success with new handler
-    Ok(ResponseBuilder::standard(request.method_type)
+    Ok(ResponseBuilder::standard(request.method_type())
         .add_param(Parameter::new(MethodParamType::PmsHandlerT, &new_handler)?)
         .build())
 }
 
 fn handle_pms_delete(
-    request: &StandardRequest,
+    request: &dyn CryptoengRequest,
     storage: &mut Storage,
     _runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
@@ -321,11 +321,11 @@ fn handle_pms_delete(
     storage.save()?;
 
     info!(?system_type, "Privacy data deleted");
-    Ok(ResponseBuilder::standard(request.method_type).build())
+    Ok(ResponseBuilder::standard(request.method_type()).build())
 }
 
 fn handle_pms_get_info(
-    request: &StandardRequest,
+    request: &dyn CryptoengRequest,
     storage: &mut Storage,
     _runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
@@ -351,7 +351,7 @@ fn handle_pms_get_info(
         "GetInfo"
     );
 
-    let mut builder = ResponseBuilder::standard(request.method_type)
+    let mut builder = ResponseBuilder::standard(request.method_type())
         .add_param(Parameter::new(
             MethodParamType::PmsPwdTypeT,
             &(privacy_data.password_type as i32).to_be_bytes(),
@@ -391,13 +391,13 @@ fn handle_pms_get_info(
 }
 
 fn handle_pms_request_encrypt_data(
-    request: &StandardRequest,
+    request: &dyn CryptoengRequest,
     _storage: &mut Storage,
     _runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
     let encrypted_data = request.get_param(MethodParamType::PmsInfoBufferT)?;
 
-    Ok(ResponseBuilder::standard(request.method_type)
+    Ok(ResponseBuilder::standard(request.method_type())
         .add_param(Parameter::new(
             MethodParamType::PmsEncBufferT,
             &encrypted_data.value().as_bytes(),
@@ -406,7 +406,7 @@ fn handle_pms_request_encrypt_data(
 }
 
 fn handle_pms_reset_all_data(
-    request: &StandardRequest,
+    request: &dyn CryptoengRequest,
     storage: &mut Storage,
     _runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
@@ -423,5 +423,5 @@ fn handle_pms_reset_all_data(
     storage.save()?;
 
     info!(?system_type, "All data reset");
-    Ok(ResponseBuilder::standard(request.method_type).build())
+    Ok(ResponseBuilder::standard(request.method_type()).build())
 }

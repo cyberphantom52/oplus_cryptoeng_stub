@@ -1,14 +1,9 @@
 use std::marker::PhantomData;
 
-use byteorder::{BigEndian, ByteOrder, LittleEndian};
+use byteorder::{BigEndian, ByteOrder};
 
+use crate::request::{Native, Standard};
 use crate::types::{method::MethodType, parameter::Parameter};
-
-/// Marker type for standard response format (cmdId > 100)
-pub struct Standard;
-
-/// Marker type for native response format (cmdId <= 100)
-pub struct Native;
 
 pub struct ResponseBuilder<T> {
     method_type: Option<MethodType>,
@@ -95,7 +90,7 @@ impl ResponseBuilder<Native> {
     /// Build the native response bytes
     pub fn build(self) -> Vec<u8> {
         let mut result = vec![0u8; 4];
-        LittleEndian::write_i32(&mut result, self.result_code);
+        BigEndian::write_i32(&mut result, self.result_code);
 
         if let Some(data) = self.extra_data {
             result.extend_from_slice(&data);

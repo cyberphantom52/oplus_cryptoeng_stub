@@ -13,7 +13,6 @@ use tracing::{debug, error};
 include!(concat!(env!("OUT_DIR"), "/cryptoeng.rs"));
 
 pub use crate::error::{CryptoengError, Result, StorageError};
-use crate::request::Request;
 use crate::response::ResponseBuilder;
 use crate::storage::{RuntimeState, Storage};
 pub use crate::types::parameter::{InfoType, PasswordQuality, SystemType, CHALLENGE_LENGTH};
@@ -42,16 +41,13 @@ impl CryptoengService {
         }
     }
 
-    fn handle_request(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let parsed = Request::parse(request)?;
+    fn handle_request(&self, data: &[u8]) -> Result<Vec<u8>> {
+        let request = request::parse(data)?;
 
         let mut storage = self.storage.write()?;
         let mut runtime = self.runtime.write()?;
 
-        match parsed {
-            Request::Standard(req) => req.handle(&mut storage, &mut runtime),
-            Request::Native(req) => req.handle(&mut storage),
-        }
+        handlers::dispatch(request.as_ref(), &mut storage, &mut runtime)
     }
 }
 
@@ -94,55 +90,41 @@ impl ICryptoeng for CryptoengService {
 
 #[cfg(test)]
 mod tests {
-    use byteorder::{BigEndian, ByteOrder, LittleEndian};
-
-    use crate::{
-        request::NativeCommand,
-        response::ResponseBuilder,
-        types::method::MethodType,
-        types::parameter::{MethodParamType, Parameter},
-    };
-
+    use byteorder::{BigEndian, ByteOrder};
+    use crate::types::{method::MethodType, parameter::{MethodParamType, Parameter}};
     use super::*;
 
     #[test]
     fn test_parse_native_command() {
-        // Native command format: [cmd_id][0][0][0][data...]
-        let request = vec![8u8, 0, 0, 0, 0, 0, 0, 0];
-        let parsed = Request::parse(&request);
+        // Native command format (big-endian): [0][0][0][cmd_id][data...]
+        let data = vec![0u8, 0, 0, 8, 0, 0, 0, 0];
+        let parsed = request::parse(&data);
         assert!(parsed.is_ok());
-        if let Ok(Request::Native(req)) = parsed {
-            assert_eq!(req.command, NativeCommand::WriteSecret);
-        } else {
-            panic!("Expected Native request");
-        }
+        let request = parsed.unwrap();
+        assert_eq!(request.method_type(), MethodType::CeCmdWriteSecret);
     }
 
     #[test]
     fn test_parse_standard_command() {
         // Standard command format: [method_type BE][buffer_size BE][param_count BE][params...]
-        let mut request = Vec::new();
+        let mut data = Vec::new();
         // Method type = 4005 (CeCmdPmsGetInfo)
-        request.extend_from_slice(&4005i32.to_be_bytes());
+        data.extend_from_slice(&4005i32.to_be_bytes());
         // Buffer size = 10000
-        request.extend_from_slice(&10000i32.to_be_bytes());
+        data.extend_from_slice(&10000i32.to_be_bytes());
         // Param count = 1
-        request.extend_from_slice(&1i32.to_be_bytes());
+        data.extend_from_slice(&1i32.to_be_bytes());
         // Param type = 201 (PmsTypeT)
-        request.extend_from_slice(&201i32.to_be_bytes());
+        data.extend_from_slice(&201i32.to_be_bytes());
         // Param length = 4
-        request.extend_from_slice(&4i32.to_be_bytes());
+        data.extend_from_slice(&4i32.to_be_bytes());
         // Param data = 1 (PrivacyPassword)
-        request.extend_from_slice(&1i32.to_be_bytes());
+        data.extend_from_slice(&1i32.to_be_bytes());
 
-        let parsed = Request::parse(&request);
-        assert!(parsed.is_ok(), "Parse failed: {:?}", parsed);
-        if let Ok(Request::Standard(req)) = parsed {
-            assert_eq!(req.method_type, MethodType::CeCmdPmsGetInfo);
-            assert_eq!(req.params.len(), 1);
-        } else {
-            panic!("Expected Standard request");
-        }
+        let parsed = request::parse(&data);
+        assert!(parsed.is_ok(), "Parse failed: {:?}", parsed.err());
+        let request = parsed.unwrap();
+        assert_eq!(request.method_type(), MethodType::CeCmdPmsGetInfo);
     }
 
     #[test]
@@ -165,7 +147,7 @@ mod tests {
             .extra_data(vec![1, 2, 3, 4])
             .build();
         assert_eq!(response.len(), 8);
-        assert_eq!(LittleEndian::read_i32(&response[0..4]), 0);
+        assert_eq!(BigEndian::read_i32(&response[0..4]), 0);
         assert_eq!(&response[4..8], &[1, 2, 3, 4]);
     }
 }

@@ -3,6 +3,7 @@
 pub enum MethodType {
     CeCmdGoogleAttestationWrite = 3,
     CeCmdGoogleAttestationVerify = 4,
+    CeCmdWriteSecret = 8,
     CeCmdFindphoneGetStatus = 18,
     CeCmdGeneratePkiCert = 24,
     CeCmdVerifyPkiCert = 25,
@@ -104,6 +105,7 @@ impl MethodType {
             MethodType::CeCmdGetSecuretype => 54,
             MethodType::CeCmdGoogleAttestationVerify => 4,
             MethodType::CeCmdGoogleAttestationWrite => 3,
+            MethodType::CeCmdWriteSecret => 8,
             MethodType::CeCmdHdcpKeyVerify => 52,
             MethodType::CeCmdHdcpKeyWrite => 51,
             MethodType::CeCmdVerifyPkiCert => 25,
@@ -177,6 +179,11 @@ impl MethodType {
         }
     }
 
+    /// Returns true if this is a native command (code <= 100)
+    pub fn is_native(&self) -> bool {
+        self.code() <= 100
+    }
+
     /// Returns the method code as big-endian bytes
     pub fn to_be_bytes(&self) -> [u8; 4] {
         self.code().to_be_bytes()
@@ -189,6 +196,7 @@ impl From<i32> for MethodType {
             // Base commands (3-90)
             3 => MethodType::CeCmdGoogleAttestationWrite,
             4 => MethodType::CeCmdGoogleAttestationVerify,
+            8 => MethodType::CeCmdWriteSecret,
             18 => MethodType::CeCmdFindphoneGetStatus,
             24 => MethodType::CeCmdGeneratePkiCert,
             25 => MethodType::CeCmdVerifyPkiCert,
