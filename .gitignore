@@ -1,3 +1,4 @@
 /target
 disassembly/
 push_aidl.sh
+.cargo/
