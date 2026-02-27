@@ -1,20 +1,19 @@
-//! Cryptoeng service server implementation.
-
 use oplus_cryptoeng_stub::{BnCryptoeng, CryptoengService};
 use rsbinder::*;
-use tracing::{info, Level};
+use tracing::{Level, info};
 use tracing_logcat::{LogcatMakeWriter, LogcatTag};
 use tracing_subscriber::EnvFilter;
 
 const DESCRIPTOR: &str = "vendor.oplus.hardware.cryptoeng.ICryptoeng/default";
 
-fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing with Android logcat
-    // Filter out verbose rsbinder logs unless RUST_LOG is set
+fn init_logging() {
+    #[cfg(not(debug_assertions))]
+    let filter = EnvFilter::new("none");
+    #[cfg(debug_assertions)]
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("oplus_cryptoeng_stub=debug,rsbinder=warn"));
 
-    let tag = LogcatTag::Fixed("cryptoeng".to_owned());
+    let tag = LogcatTag::Fixed(env!("CARGO_PKG_NAME").to_owned());
     let writer = LogcatMakeWriter::new(tag).expect("Failed to initialize logcat writer");
 
     tracing_subscriber::fmt()
@@ -22,6 +21,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .with_max_level(Level::TRACE)
         .with_env_filter(filter)
         .init();
+}
+
+fn main() -> rsbinder::Result<()> {
+    init_logging();
 
     // Initialize the process state
     ProcessState::init_default();
@@ -35,8 +38,5 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     info!(descriptor = DESCRIPTOR, "Cryptoeng service started");
 
-    // Join the thread pool to handle requests
-    let _ = ProcessState::join_thread_pool();
-
-    Ok(())
+    ProcessState::join_thread_pool()
 }

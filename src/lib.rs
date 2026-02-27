@@ -15,13 +15,9 @@ include!(concat!(env!("OUT_DIR"), "/cryptoeng.rs"));
 pub use crate::error::{CryptoengError, Result, StorageError};
 use crate::response::ResponseBuilder;
 use crate::storage::{RuntimeState, Storage};
-pub use crate::types::parameter::{InfoType, PasswordQuality, SystemType, CHALLENGE_LENGTH};
+pub use crate::types::parameter::{CHALLENGE_LENGTH, InfoType, PasswordQuality, SystemType};
 pub use crate::vendor::oplus::hardware::cryptoeng::ICryptoeng::BnCryptoeng;
 pub use crate::vendor::oplus::hardware::cryptoeng::ICryptoeng::ICryptoeng;
-
-/// Interface version and hash from the original AIDL
-pub const INTERFACE_VERSION: i32 = 1;
-pub const INTERFACE_HASH: &str = "765136eb397eb5b85ee1e089d8fec72c15e266b3";
 
 /// Buffer size constant used in the protocol
 #[allow(dead_code)]
@@ -78,21 +74,16 @@ impl ICryptoeng for CryptoengService {
 
         Ok(response)
     }
-
-    fn getInterfaceVersion(&self) -> rsbinder::status::Result<i32> {
-        Ok(INTERFACE_VERSION)
-    }
-
-    fn getInterfaceHash(&self) -> rsbinder::status::Result<String> {
-        Ok(INTERFACE_HASH.to_string())
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use byteorder::{BigEndian, ByteOrder};
-    use crate::types::{method::MethodType, parameter::{MethodParamType, Parameter}};
     use super::*;
+    use crate::types::{
+        method::MethodType,
+        parameter::{MethodParamType, Parameter},
+    };
+    use byteorder::{BigEndian, ByteOrder};
 
     #[test]
     fn test_parse_native_command() {
