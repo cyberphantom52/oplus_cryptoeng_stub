@@ -109,6 +109,10 @@ pub enum StorageError {
     /// Failed to deserialize storage data.
     #[error("failed to deserialize storage: {0}")]
     Deserialize(serde_json::Error),
+
+    /// Cryptographic operation failed (encrypt/decrypt).
+    #[error("crypto error: {0}")]
+    Crypto(String),
 }
 
 impl<T> From<PoisonError<T>> for CryptoengError {

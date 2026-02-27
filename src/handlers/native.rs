@@ -18,7 +18,7 @@ fn handle_write_secret(
     _runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
     let data = request.data();
-    
+
     // Parse: [secret_length: 4 bytes LE][secret: N bytes][token_length: 4 bytes LE][token: M bytes]
     if data.len() < 4 {
         return Err(CryptoengError::BufferTooShort {
@@ -57,11 +57,11 @@ fn handle_write_secret(
 
 fn handle_preset_data_dec(
     request: &dyn CryptoengRequest,
-    _storage: &mut Storage,
+    storage: &mut Storage,
     _runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
     let data = request.data();
-    
+
     // Parse: [aliBuf_len: 4 bytes LE][aliBuf: N bytes][enc_len: 4 bytes LE][enc: M bytes]
     if data.len() < 4 {
         return Err(CryptoengError::BufferTooShort {
@@ -102,7 +102,7 @@ fn handle_preset_data_dec(
 
     let enc_data = &data[offset..offset + enc_len];
 
-    Ok(ResponseBuilder::native()
-        .extra_data(enc_data.to_vec())
-        .build())
+    let decrypted = storage.decrypt(enc_data)?;
+
+    Ok(ResponseBuilder::native().extra_data(decrypted).build())
 }

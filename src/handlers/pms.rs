@@ -123,11 +123,7 @@ fn handle_pms_verify(
     // Check if locked using the new method
     if privacy_data.is_locked() {
         let lock_time = privacy_data.lock_time_remaining();
-        warn!(
-            ?system_type,
-            lock_time,
-            "Account is locked"
-        );
+        warn!(?system_type, lock_time, "Account is locked");
         return Err(CryptoengError::AccountLocked {
             system_type,
             lock_time,
@@ -188,11 +184,7 @@ fn handle_pms_verify(
         // Lock account if no retries left
         if privacy_data.retry_count == 0 {
             privacy_data.set_lock(30);
-            warn!(
-                ?system_type,
-                lock_time = 30,
-                "Account locked"
-            );
+            warn!(?system_type, lock_time = 30, "Account locked");
         }
 
         let retries_left = privacy_data.retry_count;
@@ -370,7 +362,9 @@ fn handle_pms_get_info(
         )?)
         .add_param(Parameter::new(
             MethodParamType::PmsSecureQuestionLockTimeLeftT,
-            &privacy_data.secure_question_lock_time_remaining().to_be_bytes(),
+            &privacy_data
+                .secure_question_lock_time_remaining()
+                .to_be_bytes(),
         )?);
 
     if !privacy_data.handler.is_empty() {
@@ -392,16 +386,17 @@ fn handle_pms_get_info(
 
 fn handle_pms_request_encrypt_data(
     request: &dyn CryptoengRequest,
-    _storage: &mut Storage,
+    storage: &mut Storage,
     _runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
-    let encrypted_data = request.get_param(MethodParamType::PmsInfoBufferT)?;
+    let plaintext = request.get_param(MethodParamType::PmsInfoBufferT)?;
+    let plaintext_bytes = plaintext.value().as_bytes();
+
+    // Encrypt using AES-256-GCM with the storage key
+    let encrypted = storage.encrypt(&plaintext_bytes)?;
 
     Ok(ResponseBuilder::standard(request.method_type())
-        .add_param(Parameter::new(
-            MethodParamType::PmsEncBufferT,
-            &encrypted_data.value().as_bytes(),
-        )?)
+        .add_param(Parameter::new(MethodParamType::PmsEncBufferT, &encrypted)?)
         .build())
 }
 
