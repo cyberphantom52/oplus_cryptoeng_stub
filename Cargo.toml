@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1.89"
-rsbinder = "0.5.0"
+rsbinder = "0.6.0"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
@@ -19,7 +19,7 @@ inventory = "0.3"
 tracing-logcat = "0.1.0"
 
 [build-dependencies]
-rsbinder-aidl = "0.5.0"
+rsbinder-aidl = "0.6.0"
 
 [lib]
 name = "oplus_cryptoeng_stub"
