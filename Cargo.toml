@@ -15,6 +15,8 @@ serde_json = "1"
 base64 = "0.22"
 sha2 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
+rand = "0.10"
+aes-gcm = "0.10"
 inventory = "0.3"
 tracing-logcat = "0.1.0"
 
