@@ -28,3 +28,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "vendor-oplus-hardware-cryptoeng-service"
 path = "src/main.rs"
+
+[profile.release]
+strip = true
+lto = true
