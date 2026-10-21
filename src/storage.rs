@@ -18,6 +18,7 @@ pub const STORAGE_DIR: &str = "/data/vendor_de/0/cryptoeng";
 
 /// AES-256-GCM nonce size in bytes (96 bits)
 const NONCE_SIZE: usize = 12;
+
 /// AES-256 key size in bytes (256 bits)
 const KEY_SIZE: usize = 32;
 
@@ -31,9 +32,11 @@ pub struct PrivacyData {
     pub retry_count: i32,
     pub secure_question_retry_count: i32,
     pub enrolled: bool,
+
     /// Timestamp when password lock expires (None = not locked)
     #[serde(default)]
     pub lock_until: Option<DateTime<Utc>>,
+
     /// Timestamp when secure question lock expires (None = not locked)
     #[serde(default)]
     pub secure_question_lock_until: Option<DateTime<Utc>>,
@@ -199,8 +202,10 @@ pub fn decrypt_data(
 pub struct Storage {
     /// Privacy data keyed by system type
     privacy_data: HashMap<i32, PrivacyData>,
+
     /// Secrets stored by writeSecret command
     secrets: HashMap<i32, Vec<u8>>,
+
     /// Encryption key (not serialized — loaded separately)
     #[serde(skip)]
     encryption_key: Option<Key<Aes256Gcm>>,
@@ -255,6 +260,7 @@ impl Storage {
                     if let Err(e) = storage.save() {
                         warn!(error = %e, "Failed to save migrated storage");
                     }
+
                     // Remove old plaintext file after successful migration
                     let _ = fs::remove_file(&json_path);
                     return storage;

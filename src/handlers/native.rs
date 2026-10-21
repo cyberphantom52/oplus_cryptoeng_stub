@@ -1,5 +1,4 @@
 //! Native command handlers
-
 use byteorder::{ByteOrder, LittleEndian};
 
 use crate::error::{CryptoengError, Result};
@@ -19,7 +18,6 @@ fn handle_write_secret(
 ) -> Result<Vec<u8>> {
     let data = request.data();
 
-    // Parse: [secret_length: 4 bytes LE][secret: N bytes][token_length: 4 bytes LE][token: M bytes]
     if data.len() < 4 {
         return Err(CryptoengError::BufferTooShort {
             got: data.len(),
@@ -62,7 +60,6 @@ fn handle_preset_data_dec(
 ) -> Result<Vec<u8>> {
     let data = request.data();
 
-    // Parse: [aliBuf_len: 4 bytes LE][aliBuf: N bytes][enc_len: 4 bytes LE][enc: M bytes]
     if data.len() < 4 {
         return Err(CryptoengError::BufferTooShort {
             got: data.len(),

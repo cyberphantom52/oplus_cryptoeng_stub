@@ -362,8 +362,6 @@ impl Value {
                     // Incoming requests: boolean flag (0 or 1)
                     Ok(Value::Boolean(BigEndian::read_i32(buf) != 0))
                 } else {
-                    // Outgoing responses: email string
-                    // TODO: Send empty if incoming value was false
                     Ok(Value::String(String::from_utf8_lossy(buf).to_string()))
                 }
             }

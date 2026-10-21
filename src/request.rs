@@ -18,21 +18,20 @@ pub struct Standard;
 
 /// Trait that requests must implement
 pub trait CryptoengRequest: fmt::Debug {
-    /// Get the method type
     fn method_type(&self) -> MethodType;
-    
-    /// Get a parameter by type (returns error for Native requests)
+
     fn get_param(&self, param_type: MethodParamType) -> Result<&Parameter>;
-    
-    /// Get raw data payload (empty for Standard requests)
+
     fn data(&self) -> &[u8];
 }
 
 #[derive(Debug, Clone)]
 pub struct Request<T> {
     pub method_type: MethodType,
+
     /// Parsed parameters (only populated for Standard requests)
     pub params: HashMap<MethodParamType, Parameter>,
+
     /// Raw data payload (only populated for Native requests)
     pub data: Vec<u8>,
     _marker: PhantomData<T>,
@@ -62,11 +61,11 @@ impl CryptoengRequest for Request<Native> {
     fn method_type(&self) -> MethodType {
         self.method_type
     }
-    
+
     fn get_param(&self, param_type: MethodParamType) -> Result<&Parameter> {
         Err(CryptoengError::MissingParameter(param_type))
     }
-    
+
     fn data(&self) -> &[u8] {
         &self.data
     }
@@ -77,13 +76,13 @@ impl CryptoengRequest for Request<Standard> {
     fn method_type(&self) -> MethodType {
         self.method_type
     }
-    
+
     fn get_param(&self, param_type: MethodParamType) -> Result<&Parameter> {
         self.params
             .get(&param_type)
             .ok_or(CryptoengError::MissingParameter(param_type))
     }
-    
+
     fn data(&self) -> &[u8] {
         &[]
     }

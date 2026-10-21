@@ -1,5 +1,4 @@
 //! Error types for the cryptoeng stub service.
-
 use std::sync::PoisonError;
 use thiserror::Error;
 

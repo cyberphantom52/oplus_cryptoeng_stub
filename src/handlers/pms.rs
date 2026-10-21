@@ -156,7 +156,6 @@ fn handle_pms_verify(
 
         info!(?system_type, ?verify_type, "Password verified");
 
-        // Reset retry count on success
         privacy_data.retry_count = 5;
 
         // Generate new handler to be used after successful modify
@@ -258,8 +257,6 @@ fn handle_pms_modify(
         }
         InfoType::SecurityQuestion => {
             tracing::error!("Storing security answer not implemented")
-            // if let Ok(_answer_info) = request.get_param(MethodParamType::PmsInfoBufferT) {
-            // }
         }
         InfoType::Email => {
             if let Ok(email) = request.get_param(MethodParamType::PmsInfoBufferT) {
@@ -290,7 +287,6 @@ fn handle_pms_modify(
 
     storage.save()?;
 
-    // Return success with new handler
     Ok(ResponseBuilder::standard(request.method_type())
         .add_param(Parameter::new(MethodParamType::PmsHandlerT, &new_handler)?)
         .build())

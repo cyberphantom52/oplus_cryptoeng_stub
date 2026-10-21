@@ -33,7 +33,11 @@ fn get_registry() -> &'static HashMap<i32, HandlerFn> {
     })
 }
 
-pub fn dispatch(request: &dyn CryptoengRequest, storage: &mut Storage, runtime: &mut RuntimeState) -> Result<Vec<u8>> {
+pub fn dispatch(
+    request: &dyn CryptoengRequest,
+    storage: &mut Storage,
+    runtime: &mut RuntimeState,
+) -> Result<Vec<u8>> {
     let registry = get_registry();
     let method_type = request.method_type();
     let code = method_type.code();

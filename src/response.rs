@@ -38,7 +38,6 @@ impl ResponseBuilder<Standard> {
         self
     }
 
-    /// Build the standard response bytes
     pub fn build(self) -> Vec<u8> {
         let mut result = Vec::new();
         let mut buf = [0u8; 4];
@@ -75,7 +74,6 @@ impl ResponseBuilder<Native> {
         }
     }
 
-    /// Set the result code
     pub fn result_code(mut self, code: i32) -> Self {
         self.result_code = code;
         self
@@ -87,7 +85,6 @@ impl ResponseBuilder<Native> {
         self
     }
 
-    /// Build the native response bytes
     pub fn build(self) -> Vec<u8> {
         let mut result = vec![0u8; 4];
         BigEndian::write_i32(&mut result, self.result_code);

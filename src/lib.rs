@@ -65,7 +65,7 @@ impl ICryptoeng for CryptoengService {
                     hex = format!("{:02x?}", &request[..std::cmp::min(64, request.len())]),
                     "Raw request data"
                 );
-                // Return an error response with the appropriate code
+
                 ResponseBuilder::native()
                     .result_code(e.result_code())
                     .build()
@@ -79,10 +79,12 @@ impl ICryptoeng for CryptoengService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::types::{
         method::MethodType,
         parameter::{MethodParamType, Parameter},
     };
+
     use byteorder::{BigEndian, ByteOrder};
 
     #[test]
@@ -99,17 +101,21 @@ mod tests {
     fn test_parse_standard_command() {
         // Standard command format: [method_type BE][buffer_size BE][param_count BE][params...]
         let mut data = Vec::new();
+
         // Method type = 4005 (CeCmdPmsGetInfo)
         data.extend_from_slice(&4005i32.to_be_bytes());
+
         // Buffer size = 10000
         data.extend_from_slice(&10000i32.to_be_bytes());
-        // Param count = 1
+
         data.extend_from_slice(&1i32.to_be_bytes());
+
         // Param type = 201 (PmsTypeT)
         data.extend_from_slice(&201i32.to_be_bytes());
+
         // Param length = 4
         data.extend_from_slice(&4i32.to_be_bytes());
-        // Param data = 1 (PrivacyPassword)
+
         data.extend_from_slice(&1i32.to_be_bytes());
 
         let parsed = request::parse(&data);
@@ -127,7 +133,9 @@ mod tests {
 
         // Check header
         assert_eq!(BigEndian::read_i32(&response[0..4]), 4005); // method type
+
         assert_eq!(BigEndian::read_i32(&response[4..8]), 0); // result code
+
         assert_eq!(BigEndian::read_i32(&response[8..12]), 1); // param count
     }
 
