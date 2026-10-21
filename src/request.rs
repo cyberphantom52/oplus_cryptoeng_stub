@@ -1,12 +1,13 @@
-use byteorder::{BigEndian, ByteOrder};
+use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use std::{collections::HashMap, fmt, marker::PhantomData};
-use tracing::{debug, warn};
 
 use crate::{
     error::{CryptoengError, Result},
     types::method::MethodType,
     types::parameter::{MethodParamType, Parameter},
 };
+
+pub const MAX_REQUEST_SIZE: usize = 0x5800;
 
 /// Marker type for native request format (cmdId <= 100)
 #[derive(Debug, Clone, Copy)]
@@ -21,8 +22,6 @@ pub trait CryptoengRequest: fmt::Debug {
     fn method_type(&self) -> MethodType;
 
     fn get_param(&self, param_type: MethodParamType) -> Result<&Parameter>;
-
-    fn data(&self) -> &[u8];
 }
 
 #[derive(Debug, Clone)]
@@ -31,29 +30,7 @@ pub struct Request<T> {
 
     /// Parsed parameters (only populated for Standard requests)
     pub params: HashMap<MethodParamType, Parameter>,
-
-    /// Raw data payload (only populated for Native requests)
-    pub data: Vec<u8>,
     _marker: PhantomData<T>,
-}
-
-impl<T> fmt::Display for Request<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self.method_type)?;
-        if !self.params.is_empty() {
-            write!(f, " {{")?;
-            let mut first = true;
-            for (_, v) in &self.params {
-                if !first {
-                    write!(f, ",")?;
-                }
-                first = false;
-                write!(f, " {}", v)?;
-            }
-            write!(f, " }}")?;
-        }
-        Ok(())
-    }
 }
 
 // Implement HandleRequest for Request<Native>
@@ -64,10 +41,6 @@ impl CryptoengRequest for Request<Native> {
 
     fn get_param(&self, param_type: MethodParamType) -> Result<&Parameter> {
         Err(CryptoengError::MissingParameter(param_type))
-    }
-
-    fn data(&self) -> &[u8] {
-        &self.data
     }
 }
 
@@ -82,14 +55,15 @@ impl CryptoengRequest for Request<Standard> {
             .get(&param_type)
             .ok_or(CryptoengError::MissingParameter(param_type))
     }
-
-    fn data(&self) -> &[u8] {
-        &[]
-    }
 }
 
 /// Parse incoming request data into the appropriate Request type
 pub fn parse(data: &[u8]) -> Result<Box<dyn CryptoengRequest>> {
+    if data.len() > MAX_REQUEST_SIZE {
+        return Err(CryptoengError::ParseError(
+            "request exceeds backend buffer limit".into(),
+        ));
+    }
     if data.len() < 4 {
         return Err(CryptoengError::BufferTooShort {
             got: data.len(),
@@ -97,13 +71,24 @@ pub fn parse(data: &[u8]) -> Result<Box<dyn CryptoengRequest>> {
         });
     }
 
-    let method_code = BigEndian::read_i32(data);
-    let method_type = MethodType::from(method_code);
+    let method_type = method_type(data);
 
+    if method_type.code() < 0 {
+        return Err(CryptoengError::ParseError("negative command code".into()));
+    }
     if method_type.is_native() {
         Ok(Box::new(Request::<Native>::parse(data)?))
     } else {
         Ok(Box::new(Request::<Standard>::parse(data)?))
+    }
+}
+
+fn method_type(data: &[u8]) -> MethodType {
+    let little_endian = LittleEndian::read_i32(data);
+    if (0..=100).contains(&little_endian) {
+        MethodType::from(little_endian)
+    } else {
+        MethodType::from(BigEndian::read_i32(data))
     }
 }
 
@@ -116,17 +101,14 @@ impl Request<Native> {
             });
         }
 
-        let method_code = BigEndian::read_i32(data);
-        let method_type = MethodType::from(method_code);
+        let method_type = method_type(data);
 
         let request = Self {
             method_type,
             params: HashMap::new(),
-            data: data[4..].to_vec(),
             _marker: PhantomData,
         };
 
-        debug!(request = %request, "Received Native Request");
         Ok(request)
     }
 }
@@ -134,11 +116,6 @@ impl Request<Native> {
 impl Request<Standard> {
     fn parse(buffer: &[u8]) -> Result<Self> {
         if buffer.len() < 12 {
-            warn!(
-                len = buffer.len(),
-                min = 12,
-                "Standard request buffer too short"
-            );
             return Err(CryptoengError::BufferTooShort {
                 got: buffer.len(),
                 min: 12,
@@ -146,61 +123,50 @@ impl Request<Standard> {
         }
 
         let method_type = MethodType::from(BigEndian::read_i32(&buffer[0..4]));
-        let _buffer_size = BigEndian::read_i32(&buffer[4..8]);
-        let param_count = BigEndian::read_i32(&buffer[8..12]) as usize;
-
-        let mut params = HashMap::with_capacity(param_count);
-        let mut offset = 12;
-
-        for i in 0..param_count {
-            if buffer.len() < offset + 8 {
-                warn!(
-                    param_index = i,
-                    offset = offset,
-                    buffer_len = buffer.len(),
-                    "Buffer too short for param header"
-                );
-                return Err(CryptoengError::BufferTooShort {
-                    got: buffer.len(),
-                    min: offset + 8,
-                });
-            }
-
-            let param_type_code = BigEndian::read_i32(&buffer[offset..offset + 4]);
-            let param_len = BigEndian::read_i32(&buffer[offset + 4..offset + 8]) as usize;
-            offset += 8;
-
-            if buffer.len() < offset + param_len {
-                warn!(
-                    param_index = i,
-                    param_len = param_len,
-                    offset = offset,
-                    buffer_len = buffer.len(),
-                    "Buffer too short for param data"
-                );
-                return Err(CryptoengError::BufferTooShort {
-                    got: buffer.len(),
-                    min: offset + param_len,
-                });
-            }
-
-            let param_data = &buffer[offset..offset + param_len];
-            offset += param_len;
-
-            let param_type = MethodParamType::from(param_type_code);
-            let parameter = Parameter::new(param_type, param_data)?;
-
-            params.insert(param_type, parameter);
+        if (4000..=4012).contains(&method_type.code()) && buffer.len() > 0x1000 {
+            return Err(CryptoengError::ParseError(
+                "PMS command exceeds TA limit".into(),
+            ));
         }
 
-        let request = Self {
+        let param_count = usize::try_from(BigEndian::read_i32(&buffer[8..12]))
+            .map_err(|_| CryptoengError::ParseError("negative parameter count".into()))?;
+        if param_count > (buffer.len() - 12) / 8 {
+            return Err(CryptoengError::ParseError(
+                "parameter count exceeds buffer".into(),
+            ));
+        }
+
+        let mut params = HashMap::with_capacity(param_count);
+        let mut remaining = &buffer[12..];
+        for _ in 0..param_count {
+            if remaining.len() < 8 {
+                return Err(CryptoengError::BufferTooShort {
+                    got: remaining.len(),
+                    min: 8,
+                });
+            }
+            let param_type = MethodParamType::from(BigEndian::read_i32(&remaining[..4]));
+            let param_len = usize::try_from(BigEndian::read_i32(&remaining[4..8]))
+                .map_err(|_| CryptoengError::ParseError("negative parameter length".into()))?;
+            remaining = &remaining[8..];
+            if param_len > remaining.len() {
+                return Err(CryptoengError::BufferTooShort {
+                    got: remaining.len(),
+                    min: param_len,
+                });
+            }
+            if param_type != MethodParamType::Unknown && !params.contains_key(&param_type) {
+                let parameter = Parameter::new(param_type, &remaining[..param_len])?;
+                params.insert(param_type, parameter);
+            }
+            remaining = &remaining[param_len..];
+        }
+
+        Ok(Self {
             method_type,
             params,
-            data: Vec::new(),
             _marker: PhantomData,
-        };
-
-        debug!(request = %request, "Received Standard Request");
-        Ok(request)
+        })
     }
 }

@@ -185,7 +185,7 @@ impl MethodType {
     }
 
     /// Returns the method code as big-endian bytes
-    pub fn to_be_bytes(&self) -> [u8; 4] {
+    pub fn to_be_bytes(self) -> [u8; 4] {
         self.code().to_be_bytes()
     }
 }
