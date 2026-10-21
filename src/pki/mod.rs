@@ -1,6 +1,7 @@
 mod certificate;
 mod credentials;
 mod error;
+mod key_parse;
 mod keymint;
 mod metadata;
 mod public_key;
