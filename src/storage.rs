@@ -42,6 +42,8 @@ pub struct PrivacyData {
     pub secure_question_retry_count: i32,
     pub enrolled: bool,
     #[serde(default)]
+    pub authorization: Option<PendingVerification>,
+    #[serde(default)]
     password_retry: Option<RetryRecord>,
     #[serde(default)]
     question_retry: Option<RetryRecord>,
@@ -241,9 +243,21 @@ impl PrivacyData {
     }
 }
 
-/// Pending verification state for verify->modify flow (runtime only, not persisted)
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingVerification {
+    pub challenge: Vec<u8>,
+    pub issued_at: BootTimestamp,
+}
+
+impl PendingVerification {
+    pub fn is_expired(&self, now: &BootTimestamp, lifetime_ms: u64) -> bool {
+        now.elapsed_since(&self.issued_at)
+            .is_none_or(|elapsed| elapsed >= lifetime_ms)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct LegacyPendingVerification {
     pub challenge: Vec<u8>,
     pub pending_handler: Vec<u8>,
 }
@@ -253,8 +267,7 @@ pub struct PendingVerification {
 pub struct RuntimeState {
     boot_id: Option<String>,
 
-    /// Pending verifications keyed by system type
-    pub pending: HashMap<SystemType, PendingVerification>,
+    pub pending: HashMap<SystemType, LegacyPendingVerification>,
 }
 
 impl RuntimeState {
@@ -308,7 +321,7 @@ impl RuntimeState {
     ) {
         self.pending.insert(
             system_type,
-            PendingVerification {
+            LegacyPendingVerification {
                 challenge,
                 pending_handler,
             },
@@ -316,12 +329,12 @@ impl RuntimeState {
     }
 
     /// Get pending verification for the given system type
-    pub fn get_pending(&self, system_type: SystemType) -> Option<&PendingVerification> {
+    pub fn get_pending(&self, system_type: SystemType) -> Option<&LegacyPendingVerification> {
         self.pending.get(&system_type)
     }
 
     /// Take and remove pending verification for the given system type
-    pub fn take_pending(&mut self, system_type: SystemType) -> Option<PendingVerification> {
+    pub fn take_pending(&mut self, system_type: SystemType) -> Option<LegacyPendingVerification> {
         self.pending.remove(&system_type)
     }
 }
