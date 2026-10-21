@@ -73,11 +73,7 @@ impl ICryptoeng for CryptoengService {
             },
             Err(error) => {
                 error!(%error, "invalid cryptoeng request");
-                if let Some(method) = request::parameter_error_method(request, &error) {
-                    response::failure(method, error.result_code())
-                } else {
-                    ResponseBuilder::native().result_code(-1).build()
-                }
+                ResponseBuilder::native().result_code(-1).build()
             }
         };
 

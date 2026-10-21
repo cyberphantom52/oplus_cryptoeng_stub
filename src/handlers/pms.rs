@@ -254,10 +254,8 @@ fn modify(
     };
 
     require_privacy_system(system_type)?;
-    let challenge = request
-        .get_param(MethodParamType::PmsChallengeT)?
-        .value()
-        .as_bytes();
+    let challenge_parameter = request.get_param(MethodParamType::PmsChallengeT)?;
+    let challenge = challenge_parameter.value().as_bytes();
     if challenge.len() != crate::CHALLENGE_LENGTH {
         return Err(CryptoengError::ParseError(
             "invalid challenge length".into(),
@@ -292,10 +290,8 @@ fn modify(
     ) {
         return Err(CryptoengError::UnsupportedOperation);
     }
-    let information = request
-        .get_param(MethodParamType::PmsInfoBufferT)?
-        .value()
-        .as_bytes();
+    let information_parameter = request.get_param(MethodParamType::PmsInfoBufferT)?;
+    let information = information_parameter.value().as_bytes();
     let pending = storage
         .get_privacy_data(system_type)
         .and_then(|data| data.authorization.as_ref())
@@ -365,10 +361,8 @@ fn delete(
         }
     };
     require_privacy_system(system_type)?;
-    let challenge = request
-        .get_param(MethodParamType::PmsChallengeT)?
-        .value()
-        .as_bytes();
+    let challenge_parameter = request.get_param(MethodParamType::PmsChallengeT)?;
+    let challenge = challenge_parameter.value().as_bytes();
     if challenge.len() != crate::CHALLENGE_LENGTH {
         return Err(CryptoengError::ParseError(
             "invalid challenge length".into(),

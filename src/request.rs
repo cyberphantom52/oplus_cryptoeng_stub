@@ -21,15 +21,14 @@ pub struct Standard;
 pub trait CryptoengRequest: fmt::Debug {
     fn method_type(&self) -> MethodType;
 
-    fn get_param(&self, param_type: MethodParamType) -> Result<&Parameter>;
+    fn get_param(&self, param_type: MethodParamType) -> Result<Parameter>;
 }
 
 #[derive(Debug, Clone)]
 pub struct Request<T> {
     pub method_type: MethodType,
 
-    /// Parsed parameters (only populated for Standard requests)
-    pub params: HashMap<MethodParamType, Parameter>,
+    params: HashMap<MethodParamType, Vec<u8>>,
     _marker: PhantomData<T>,
 }
 
@@ -39,7 +38,7 @@ impl CryptoengRequest for Request<Native> {
         self.method_type
     }
 
-    fn get_param(&self, param_type: MethodParamType) -> Result<&Parameter> {
+    fn get_param(&self, param_type: MethodParamType) -> Result<Parameter> {
         Err(CryptoengError::MissingParameter(param_type))
     }
 }
@@ -50,11 +49,13 @@ impl CryptoengRequest for Request<Standard> {
         self.method_type
     }
 
-    fn get_param(&self, param_type: MethodParamType) -> Result<&Parameter> {
-        self.params
+    fn get_param(&self, param_type: MethodParamType) -> Result<Parameter> {
+        let bytes = self
+            .params
             .get(&param_type)
-            .filter(|parameter| !parameter.value().as_bytes().is_empty())
-            .ok_or(CryptoengError::MissingParameter(param_type))
+            .filter(|bytes| !bytes.is_empty())
+            .ok_or(CryptoengError::MissingParameter(param_type))?;
+        Parameter::new(param_type, bytes)
     }
 }
 
@@ -91,19 +92,6 @@ fn method_type(data: &[u8]) -> MethodType {
     } else {
         MethodType::from(BigEndian::read_i32(data))
     }
-}
-
-pub fn parameter_error_method(data: &[u8], error: &CryptoengError) -> Option<MethodType> {
-    if !matches!(
-        error,
-        CryptoengError::InvalidParameterData { .. }
-            | CryptoengError::ParameterBufferTooShort { .. }
-            | CryptoengError::MissingParameter(_)
-    ) {
-        return None;
-    }
-    let method = MethodType::from(i32::from_be_bytes(data.get(..4)?.try_into().ok()?));
-    (4000..=4012).contains(&method.code()).then_some(method)
 }
 
 impl Request<Native> {
@@ -170,9 +158,10 @@ impl Request<Standard> {
                     min: param_len,
                 });
             }
-            if param_type != MethodParamType::Unknown && !params.contains_key(&param_type) {
-                let parameter = Parameter::new(param_type, &remaining[..param_len])?;
-                params.insert(param_type, parameter);
+            if param_type != MethodParamType::Unknown {
+                params
+                    .entry(param_type)
+                    .or_insert_with(|| remaining[..param_len].to_vec());
             }
             remaining = &remaining[param_len..];
         }
