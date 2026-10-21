@@ -27,6 +27,8 @@ pub(crate) enum CertificateError {
 
     #[error("application public key is invalid or unsupported")]
     InvalidPublicKey,
+    #[error("application public-key parsing failed with donor status {0}")]
+    PublicKeyParsing(i32),
     #[error("certificate encoding failed")]
     Encoding,
     #[error("certificate signing failed")]

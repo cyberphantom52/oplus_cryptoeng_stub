@@ -26,6 +26,8 @@ pub(super) enum PkiError {
     InvalidCredentials,
     #[error("invalid application public key")]
     InvalidPublicKey,
+    #[error("application public-key parsing failed with donor status {0}")]
+    PublicKeyParsing(i32),
     #[error("certificate encoding or signing failed")]
     Encoding,
     #[error("native caller context failed with status {0}")]
@@ -59,6 +61,7 @@ impl PkiError {
             Self::CredentialsUnavailable => 10050,
             Self::InvalidCredentials => 10017,
             Self::InvalidPublicKey => -0x3d00,
+            Self::PublicKeyParsing(status) => *status,
             Self::NativeContext(status) => *status,
         }
     }

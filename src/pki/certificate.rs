@@ -159,6 +159,24 @@ pub(crate) fn parse_public_key(pem: &str) -> Result<SubjectPublicKeyInfo, Certif
         .map_err(|_| CertificateError::InvalidPublicKey)?;
     let pem = normalized.as_str();
 
+    if !matches!(decoder.type_label(), "PUBLIC KEY" | "RSA PUBLIC KEY") {
+        return Err(CertificateError::InvalidPublicKey);
+    }
+
+    let decoded_spki = SubjectPublicKeyInfo::from_der(&decoded).ok();
+    if let Some(key) = &decoded_spki
+        && key.algorithm.oid == ObjectIdentifier::new_unwrap("1.2.840.10045.2.1")
+    {
+        super::public_key::point_format(key).map_err(CertificateError::PublicKeyParsing)?;
+    }
+
+    if decoder.type_label() == "PUBLIC KEY"
+        && let Ok(key) = SubjectPublicKeyInfo::from_der(&decoded)
+        && super::public_key::validate(&key)
+    {
+        return Ok(key);
+    }
+
     let public_der = if let Ok(key) = rsa::RsaPublicKey::from_public_key_pem(pem) {
         key.to_public_key_der()
     } else if let Ok(key) = rsa::RsaPublicKey::from_pkcs1_pem(pem) {
@@ -172,7 +190,15 @@ pub(crate) fn parse_public_key(pem: &str) -> Result<SubjectPublicKeyInfo, Certif
     } else if let Ok(key) = p521::PublicKey::from_public_key_pem(pem) {
         key.to_public_key_der()
     } else {
-        return Err(CertificateError::InvalidPublicKey);
+        let status = if decoder.type_label() == "RSA PUBLIC KEY"
+            || decoded_spki.as_ref().is_some_and(|key| {
+                key.algorithm.oid == ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1")
+            }) {
+            -0x3b00
+        } else {
+            -0x4c80
+        };
+        return Err(CertificateError::PublicKeyParsing(status));
     }
     .map_err(|_| CertificateError::InvalidPublicKey)?;
     SubjectPublicKeyInfo::from_der(public_der.as_bytes())

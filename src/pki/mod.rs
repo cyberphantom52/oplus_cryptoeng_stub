@@ -3,6 +3,7 @@ mod credentials;
 mod error;
 mod keymint;
 mod metadata;
+mod public_key;
 mod request;
 
 use std::sync::Mutex;
@@ -151,6 +152,7 @@ fn certificate_status(error: CertificateError) -> PkiError {
         CertificateError::InvalidIssuer => PkiError::InvalidCredentials,
 
         CertificateError::InvalidPublicKey => PkiError::InvalidPublicKey,
+        CertificateError::PublicKeyParsing(status) => PkiError::PublicKeyParsing(status),
         CertificateError::Encoding | CertificateError::Signing => PkiError::Encoding,
         CertificateError::KeyMint(error) => match error {
             keymint::KeyMintError::InvalidMetadata | keymint::KeyMintError::InvalidSignature => {
