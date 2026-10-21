@@ -1,5 +1,6 @@
 mod error;
 mod handlers;
+
 mod pki;
 mod request;
 mod response;
@@ -12,6 +13,7 @@ use std::sync::{Arc, RwLock};
 use tracing::error;
 
 include!(concat!(env!("OUT_DIR"), "/cryptoeng.rs"));
+include!(concat!(env!("OUT_DIR"), "/keystore2.rs"));
 
 pub use crate::error::{CryptoengError, Result, StorageError};
 use crate::response::ResponseBuilder;
