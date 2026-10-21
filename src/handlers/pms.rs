@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 
@@ -19,6 +21,16 @@ register_handler!(MethodType::CeCmdPmsGetInfo, handle_pms_get_info);
 fn handle_pms_enroll(
     request: &dyn CryptoengRequest,
     storage: &mut Storage,
+    runtime: &mut RuntimeState,
+) -> Result<Vec<u8>> {
+    let response = enroll(request, storage, runtime)?;
+    storage.save()?;
+    Ok(response)
+}
+
+fn enroll(
+    request: &dyn CryptoengRequest,
+    storage: &mut Storage,
     _runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
     let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
@@ -29,7 +41,7 @@ fn handle_pms_enroll(
             ));
         }
     };
-    let privacy_data = storage.get_privacy_data_mut(system_type);
+    require_privacy_system(system_type)?;
 
     // Get password type (required for enrollment)
     let password_type = match request.get_param(MethodParamType::PmsPwdTypeT)?.value() {
@@ -40,10 +52,53 @@ fn handle_pms_enroll(
             ));
         }
     };
-    privacy_data.password_type = password_type;
 
     // Get password info (hash) - required for enrollment
     let pwd_info = request.get_param(MethodParamType::PmsPwdInfoT)?;
+    if password_type == crate::PasswordQuality::Unspecified
+        || pwd_info.value().as_bytes().len() != 32
+    {
+        return Err(CryptoengError::ParseError(
+            "invalid password enrollment".into(),
+        ));
+    }
+    let secure_info = request.get_param(MethodParamType::PmsSecureInfoBufferT)?;
+    let Value::SecureBuffer(buffer) = secure_info.value() else {
+        return Err(CryptoengError::ParseError(
+            "invalid recovery records".into(),
+        ));
+    };
+    if buffer.entries.is_empty()
+        || buffer.entries.len() > 6
+        || !buffer.entries.iter().any(|entry| {
+            entry.ty == InfoType::SecurityQuestion && entry.value.as_bytes().len() == 32
+        })
+        || buffer.entries.iter().any(|entry| {
+            !matches!(
+                entry.ty,
+                InfoType::Email | InfoType::EmailEx1 | InfoType::SecurityQuestion
+            ) || entry.value.as_bytes().is_empty()
+                || (entry.ty == InfoType::SecurityQuestion && entry.value.as_bytes().len() != 32)
+        })
+    {
+        return Err(CryptoengError::ParseError(
+            "invalid recovery records".into(),
+        ));
+    }
+
+    let mut seen = HashSet::new();
+    if buffer.entries.iter().any(|entry| !seen.insert(entry.ty))
+        || (seen.contains(&InfoType::EmailEx1) && !seen.contains(&InfoType::Email))
+    {
+        return Err(CryptoengError::ParseError(
+            "duplicate or orphaned recovery records".into(),
+        ));
+    }
+    let privacy_data = storage.get_privacy_data_mut(system_type);
+    if privacy_data.enrolled {
+        return Err(CryptoengError::AlreadyEnrolled(system_type));
+    }
+    privacy_data.password_type = password_type;
     privacy_data.password_hash = pwd_info.value().as_bytes().to_vec();
 
     // Parse email from PmsSecureInfoBufferT if present
@@ -61,6 +116,9 @@ fn handle_pms_enroll(
                 (InfoType::EmailEx1, Value::String(s)) => {
                     email_continuation = Some(s.trim_end_matches('\0').to_string());
                 }
+                (InfoType::SecurityQuestion, Value::Buffer(answer)) if answer.len() == 32 => {
+                    privacy_data.security_answer_hash = answer.clone();
+                }
                 _ => continue,
             }
         }
@@ -70,21 +128,18 @@ fn handle_pms_enroll(
                 Some(cont) => format!("{}{}", first, cont),
                 None => first,
             };
-            info!(email = %privacy_data.email, "Email saved during enroll");
+            info!("Email saved during enroll");
         }
     }
 
     // Generate a handler token (must be exactly 8 bytes for password verification)
     privacy_data.handler = generate_random_bytes(8);
     privacy_data.enrolled = true;
-    privacy_data.retry_count = 5;
-    privacy_data.lock_until = None;
+    privacy_data.reset_retries();
 
     info!(?system_type, ?password_type, "User enrolled");
 
     let handler = privacy_data.handler.clone();
-    storage.save()?;
-
     Ok(ResponseBuilder::standard(request.method_type())
         .add_param(Parameter::new(MethodParamType::PmsHandlerT, &handler)?)
         .build())
@@ -103,6 +158,7 @@ fn handle_pms_verify(
             ));
         }
     };
+    require_privacy_system(system_type)?;
 
     let verify_type = match request.get_param(MethodParamType::PmsVerifyTypeT)?.value() {
         Value::InfoType(ty) => *ty,
@@ -151,6 +207,7 @@ fn handle_pms_verify(
 
         info!(?system_type, ?verify_type, "Password verified");
 
+        // Reset retry count on success
         privacy_data.retry_count = 5;
 
         // Generate new handler to be used after successful modify
@@ -204,6 +261,7 @@ fn handle_pms_modify(
             ));
         }
     };
+    require_privacy_system(system_type)?;
 
     // Get the challenge provided in the modify request (optional for some flows)
     let challenge = request
@@ -300,6 +358,7 @@ fn handle_pms_delete(
             ));
         }
     };
+    require_privacy_system(system_type)?;
     storage.reset_privacy_data(system_type);
     storage.save()?;
 
@@ -320,6 +379,7 @@ fn handle_pms_get_info(
             ));
         }
     };
+    require_privacy_system(system_type)?;
 
     let privacy_data = storage
         .get_privacy_data(system_type)
@@ -373,4 +433,12 @@ fn handle_pms_get_info(
     }
 
     Ok(builder.build())
+}
+
+fn require_privacy_system(system: crate::SystemType) -> Result<()> {
+    if system == crate::SystemType::PrivacyPassword {
+        Ok(())
+    } else {
+        Err(CryptoengError::UnsupportedOperation)
+    }
 }

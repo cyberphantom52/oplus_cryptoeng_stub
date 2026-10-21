@@ -59,6 +59,9 @@ pub enum CryptoengError {
     #[error("user not enrolled for system type {0:?}")]
     NotEnrolled(SystemType),
 
+    #[error("already enrolled for system type {0:?}")]
+    AlreadyEnrolled(SystemType),
+
     /// Account is locked due to too many failed attempts.
     #[error("account locked for system type {system_type:?}, time remaining: {lock_time}s")]
     AccountLocked {
@@ -142,6 +145,7 @@ impl CryptoengError {
             Self::ParameterBufferTooShort { .. }
             | Self::InvalidParameterData { .. }
             | Self::ParseError(_) => Some(10014),
+            Self::AlreadyEnrolled(_) => Some(10031),
             Self::InvalidEmail => Some(10001),
             Self::VerificationFailed { .. } => Some(10017),
             Self::ChallengeMismatch(_) => Some(10033),

@@ -33,6 +33,8 @@ const KEY_SIZE: usize = 32;
 pub struct PrivacyData {
     pub password_type: PasswordQuality,
     pub password_hash: Vec<u8>,
+    #[serde(default)]
+    pub security_answer_hash: Vec<u8>,
     pub email: String,
     pub handler: Vec<u8>,
     pub retry_count: i32,
@@ -49,6 +51,13 @@ pub struct PrivacyData {
 }
 
 impl PrivacyData {
+    pub fn reset_retries(&mut self) {
+        self.retry_count = 5;
+        self.secure_question_retry_count = 5;
+        self.lock_until = None;
+        self.secure_question_lock_until = None;
+    }
+
     /// Returns the remaining lock time in seconds, or 0 if not locked
     pub fn lock_time_remaining(&self) -> i32 {
         self.lock_until
