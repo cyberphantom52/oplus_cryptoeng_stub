@@ -384,6 +384,13 @@ impl Storage {
         Self::default()
     }
 
+    pub(crate) fn unavailable() -> Self {
+        Self {
+            persistence_failed: true,
+            ..Self::default()
+        }
+    }
+
     /// Get the encryption key, loading/creating it if needed
     pub fn key(&mut self) -> std::result::Result<&Key<Aes256Gcm>, StorageError> {
         if self.encryption_key.is_none() {

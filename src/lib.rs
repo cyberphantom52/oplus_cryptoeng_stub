@@ -1,5 +1,6 @@
 mod error;
 mod handlers;
+mod pki;
 mod request;
 mod response;
 mod storage;
@@ -28,12 +29,18 @@ pub struct CryptoengService {
 impl CryptoengService {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            storage: Arc::new(RwLock::new(Storage::load()?)),
+            storage: Arc::new(RwLock::new(Storage::load().unwrap_or_else(|error| {
+                error!(%error, "PMS storage unavailable; preserving files for recovery");
+                Storage::unavailable()
+            }))),
             runtime: Arc::new(RwLock::new(RuntimeState::new())),
         })
     }
 
     fn handle_request(&self, request: &dyn request::CryptoengRequest) -> Result<Vec<u8>> {
+        if let Some(response) = pki::dispatch(request) {
+            return Ok(response);
+        }
         let mut storage = self.storage.write()?;
         storage.ensure_available()?;
         let mut runtime = self.runtime.write()?;
@@ -45,6 +52,13 @@ impl Interface for CryptoengService {}
 
 impl ICryptoeng for CryptoengService {
     fn cryptoeng_invoke_command(&self, request: &[u8]) -> rsbinder::BinderResult<Vec<u8>> {
+        if request.starts_with(&10014i32.to_be_bytes()) && request.len() > 4096 {
+            return Ok(ResponseBuilder::standard(
+                types::method::MethodType::CeCmdRunPkiBasicAttestation,
+            )
+            .result_code(10037)
+            .build());
+        }
         let response = match request::parse(request) {
             Ok(parsed) => match self.handle_request(parsed.as_ref()) {
                 Ok(response) => response,
