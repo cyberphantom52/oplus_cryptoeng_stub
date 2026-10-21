@@ -17,8 +17,19 @@ chrono = { version = "0.4", features = ["serde"] }
 rand = "0.10"
 aes-gcm = "0.10"
 inventory = "0.3"
-rustix = { version = "1.1.4", features = ["time"] }
+rustix = { version = "1.1.4", features = ["time", "fs", "process"] }
 tracing-logcat = "0.1.0"
+x509-cert = { version = "0.3", features = ["builder"] }
+
+rsa = { version = "=0.10.0-rc.19", features = ["sha2"] }
+sha1 = "0.11"
+sha2_11 = { package = "sha2", version = "0.11", features = ["oid"] }
+p224 = { version = "=0.14.0-rc.15", features = ["pem"] }
+p256 = { version = "0.14", features = ["ecdsa", "pem"] }
+p384 = { version = "0.14", features = ["ecdsa", "pem"] }
+p521 = { version = "0.14", features = ["ecdsa", "pem"] }
+zeroize = "1"
+rsproperties = "0.6"
 
 [build-dependencies]
 rsbinder-aidl = "0.12.0"
