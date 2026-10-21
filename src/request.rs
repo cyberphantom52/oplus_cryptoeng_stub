@@ -53,6 +53,7 @@ impl CryptoengRequest for Request<Standard> {
     fn get_param(&self, param_type: MethodParamType) -> Result<&Parameter> {
         self.params
             .get(&param_type)
+            .filter(|parameter| !parameter.value().as_bytes().is_empty())
             .ok_or(CryptoengError::MissingParameter(param_type))
     }
 }
@@ -90,6 +91,19 @@ fn method_type(data: &[u8]) -> MethodType {
     } else {
         MethodType::from(BigEndian::read_i32(data))
     }
+}
+
+pub fn parameter_error_method(data: &[u8], error: &CryptoengError) -> Option<MethodType> {
+    if !matches!(
+        error,
+        CryptoengError::InvalidParameterData { .. }
+            | CryptoengError::ParameterBufferTooShort { .. }
+            | CryptoengError::MissingParameter(_)
+    ) {
+        return None;
+    }
+    let method = MethodType::from(i32::from_be_bytes(data.get(..4)?.try_into().ok()?));
+    (4000..=4012).contains(&method.code()).then_some(method)
 }
 
 impl Request<Native> {

@@ -9,7 +9,6 @@ pub struct ResponseBuilder<T> {
     method_type: Option<MethodType>,
     result_code: i32,
     parameters: Vec<Parameter>,
-    extra_data: Option<Vec<u8>>,
     _marker: PhantomData<T>,
 }
 
@@ -20,7 +19,6 @@ impl ResponseBuilder<Standard> {
             method_type: Some(method_type),
             result_code: 0,
             parameters: Vec::new(),
-            extra_data: None,
             _marker: PhantomData,
         }
     }
@@ -69,7 +67,6 @@ impl ResponseBuilder<Native> {
             method_type: None,
             result_code: 0,
             parameters: Vec::new(),
-            extra_data: None,
             _marker: PhantomData,
         }
     }
@@ -79,20 +76,20 @@ impl ResponseBuilder<Native> {
         self
     }
 
-    /// Set extra data
-    pub fn extra_data(mut self, data: Vec<u8>) -> Self {
-        self.extra_data = Some(data);
-        self
-    }
-
     pub fn build(self) -> Vec<u8> {
         let mut result = vec![0u8; 4];
         BigEndian::write_i32(&mut result, self.result_code);
 
-        if let Some(data) = self.extra_data {
-            result.extend_from_slice(&data);
-        }
-
         result
+    }
+}
+
+pub fn failure(method_type: MethodType, result_code: Option<i32>) -> Vec<u8> {
+    if let Some(result_code) = result_code.filter(|_| !method_type.is_native()) {
+        ResponseBuilder::standard(method_type)
+            .result_code(result_code)
+            .build()
+    } else {
+        ResponseBuilder::native().result_code(-1).build()
     }
 }

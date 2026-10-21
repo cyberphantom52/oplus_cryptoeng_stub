@@ -13,6 +13,18 @@ pub type Result<T> = std::result::Result<T, CryptoengError>;
 /// Main error type for cryptoeng operations.
 #[derive(Debug, Error)]
 pub enum CryptoengError {
+    #[error("invalid email")]
+    InvalidEmail,
+
+    #[error("boot clock unavailable")]
+    ClockUnavailable,
+
+    #[error("operation is unsupported")]
+    UnsupportedOperation,
+
+    #[error("challenge expired")]
+    ChallengeExpired,
+
     /// Request buffer is too short to parse.
     #[error("request buffer too short: got {got} bytes, need at least {min}")]
     BufferTooShort { got: usize, min: usize },
@@ -123,23 +135,18 @@ impl<T> From<PoisonError<T>> for CryptoengError {
 impl CryptoengError {
     /// Returns an appropriate result code for this error.
     /// These codes are returned to the Android client.
-    pub fn result_code(&self) -> i32 {
+    pub fn result_code(&self) -> Option<i32> {
         match self {
-            CryptoengError::BufferTooShort { .. } => -1,
-            CryptoengError::MissingParameter(_) => -2,
-            CryptoengError::ParameterBufferTooShort { .. } => -3,
-            CryptoengError::InvalidParameterData { .. } => -3,
-            CryptoengError::UnknownMethod(_) => -4,
-            CryptoengError::UnknownNativeCommand(_) => -5,
-            CryptoengError::NotEnrolled(_) => -10,
-            CryptoengError::AccountLocked { .. } => -11,
-            CryptoengError::VerificationFailed { .. } => -12,
-            CryptoengError::ChallengeMismatch(_) => -13,
-            CryptoengError::NoVerifyBuffer => -14,
-            CryptoengError::PasswordDataNotFound(_) => -20,
-            CryptoengError::Storage(_) => -100,
-            CryptoengError::LockPoisoned => -101,
-            CryptoengError::ParseError(_) => -1,
+            Self::UnsupportedOperation => Some(10012),
+            Self::MissingParameter(parameter) => Some(10100 + *parameter as i32),
+            Self::ParameterBufferTooShort { .. }
+            | Self::InvalidParameterData { .. }
+            | Self::ParseError(_) => Some(10014),
+            Self::InvalidEmail => Some(10001),
+            Self::VerificationFailed { .. } => Some(10017),
+            Self::ChallengeMismatch(_) => Some(10033),
+            Self::ChallengeExpired => Some(10034),
+            _ => None,
         }
     }
 }

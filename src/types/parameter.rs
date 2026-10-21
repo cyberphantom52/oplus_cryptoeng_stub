@@ -203,6 +203,7 @@ pub enum InfoType {
     Face = 6,
     Iris = 7,
     ScreenLockToken = 8,
+    StoredPassword = 9,
     EmailEx1 = 10,
 }
 
@@ -228,6 +229,7 @@ impl TryFrom<&[u8]> for InfoType {
             6 => Ok(InfoType::Face),
             7 => Ok(InfoType::Iris),
             8 => Ok(InfoType::ScreenLockToken),
+            9 => Ok(InfoType::StoredPassword),
             10 => Ok(InfoType::EmailEx1),
             _ => Err(CryptoengError::InvalidParameterData {
                 param: MethodParamType::PmsVerifyTypeT,
@@ -362,6 +364,17 @@ impl std::fmt::Display for Value {
 
 impl Value {
     pub fn try_from(ty: MethodParamType, buf: &[u8]) -> Result<Self> {
+        if buf.is_empty()
+            && matches!(
+                ty,
+                MethodParamType::PmsTypeT
+                    | MethodParamType::PmsPwdTypeT
+                    | MethodParamType::PmsVerifyTypeT
+                    | MethodParamType::PmsInfoTypeT
+            )
+        {
+            return Err(CryptoengError::MissingParameter(ty));
+        }
         match ty {
             MethodParamType::PmsTypeT => Ok(Value::SystemType(SystemType::try_from(buf)?)),
             MethodParamType::PmsPwdTypeT => {

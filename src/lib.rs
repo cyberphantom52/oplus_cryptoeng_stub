@@ -8,7 +8,7 @@ mod utils;
 
 use rsbinder::*;
 use std::sync::{Arc, RwLock};
-use tracing::{debug, error};
+use tracing::error;
 
 include!(concat!(env!("OUT_DIR"), "/cryptoeng.rs"));
 
@@ -18,10 +18,6 @@ use crate::storage::{RuntimeState, Storage};
 pub use crate::types::parameter::{CHALLENGE_LENGTH, InfoType, PasswordQuality, SystemType};
 pub use crate::vendor::oplus::hardware::cryptoeng::ICryptoeng::BnCryptoeng;
 pub use crate::vendor::oplus::hardware::cryptoeng::ICryptoeng::ICryptoeng;
-
-/// Buffer size constant used in the protocol
-#[allow(dead_code)]
-const BUFFER_SIZE: i32 = 10000;
 
 /// Main cryptoeng service with storage backend
 pub struct CryptoengService {
@@ -37,14 +33,11 @@ impl CryptoengService {
         })
     }
 
-    fn handle_request(&self, data: &[u8]) -> Result<Vec<u8>> {
-        let request = request::parse(data)?;
-
+    fn handle_request(&self, request: &dyn request::CryptoengRequest) -> Result<Vec<u8>> {
         let mut storage = self.storage.write()?;
         storage.ensure_available()?;
         let mut runtime = self.runtime.write()?;
-
-        handlers::dispatch(request.as_ref(), &mut storage, &mut runtime)
+        handlers::dispatch(request, &mut storage, &mut runtime)
     }
 }
 
@@ -52,18 +45,21 @@ impl Interface for CryptoengService {}
 
 impl ICryptoeng for CryptoengService {
     fn cryptoeng_invoke_command(&self, request: &[u8]) -> rsbinder::BinderResult<Vec<u8>> {
-        let response = match self.handle_request(request) {
-            Ok(response) => response,
-            Err(e) => {
-                error!(error = %e, "Request handling failed");
-                debug!(
-                    hex = format!("{:02x?}", &request[..std::cmp::min(64, request.len())]),
-                    "Raw request data"
-                );
-
-                ResponseBuilder::native()
-                    .result_code(e.result_code())
-                    .build()
+        let response = match request::parse(request) {
+            Ok(parsed) => match self.handle_request(parsed.as_ref()) {
+                Ok(response) => response,
+                Err(error) => {
+                    error!(%error, method = parsed.method_type().code(), "request handling failed");
+                    response::failure(parsed.method_type(), error.result_code())
+                }
+            },
+            Err(error) => {
+                error!(%error, "invalid cryptoeng request");
+                if let Some(method) = request::parameter_error_method(request, &error) {
+                    response::failure(method, error.result_code())
+                } else {
+                    ResponseBuilder::native().result_code(-1).build()
+                }
             }
         };
 
@@ -136,12 +132,7 @@ mod tests {
 
     #[test]
     fn test_native_response() {
-        let response = ResponseBuilder::native()
-            .result_code(0)
-            .extra_data(vec![1, 2, 3, 4])
-            .build();
-        assert_eq!(response.len(), 8);
-        assert_eq!(BigEndian::read_i32(&response[0..4]), 0);
-        assert_eq!(&response[4..8], &[1, 2, 3, 4]);
+        let response = ResponseBuilder::native().result_code(-1).build();
+        assert_eq!(response, (-1i32).to_be_bytes());
     }
 }
