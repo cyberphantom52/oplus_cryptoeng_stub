@@ -167,7 +167,7 @@ impl TryFrom<&[u8]> for PasswordQuality {
     type Error = CryptoengError;
 
     fn try_from(value: &[u8]) -> Result<Self> {
-        if value.len() < 4 {
+        if value.len() != 4 {
             return Err(CryptoengError::ParameterBufferTooShort {
                 param: MethodParamType::PmsPwdTypeT,
                 expected: 4,
@@ -202,6 +202,7 @@ pub enum InfoType {
     Fingerprint = 5,
     Face = 6,
     Iris = 7,
+    ScreenLockToken = 8,
     EmailEx1 = 10,
 }
 
@@ -209,7 +210,7 @@ impl TryFrom<&[u8]> for InfoType {
     type Error = CryptoengError;
 
     fn try_from(value: &[u8]) -> Result<Self> {
-        if value.len() < 4 {
+        if value.len() != 4 {
             return Err(CryptoengError::ParameterBufferTooShort {
                 param: MethodParamType::PmsVerifyTypeT,
                 expected: 4,
@@ -226,6 +227,7 @@ impl TryFrom<&[u8]> for InfoType {
             5 => Ok(InfoType::Fingerprint),
             6 => Ok(InfoType::Face),
             7 => Ok(InfoType::Iris),
+            8 => Ok(InfoType::ScreenLockToken),
             10 => Ok(InfoType::EmailEx1),
             _ => Err(CryptoengError::InvalidParameterData {
                 param: MethodParamType::PmsVerifyTypeT,
@@ -247,7 +249,7 @@ impl TryFrom<&[u8]> for SystemType {
     type Error = CryptoengError;
 
     fn try_from(value: &[u8]) -> Result<Self> {
-        if value.len() < 4 {
+        if value.len() != 4 {
             return Err(CryptoengError::ParameterBufferTooShort {
                 param: MethodParamType::PmsTypeT,
                 expected: 4,
@@ -285,19 +287,32 @@ impl TryFrom<&[u8]> for SecureBuffer {
     type Error = CryptoengError;
 
     fn try_from(value: &[u8]) -> Result<Self> {
-        let mut offset = 0;
-        let mut entries = Vec::new();
-        while offset + 8 + SecureBufferEntry::SIZE <= value.len() {
-            let entry_type = InfoType::try_from(&value[offset..offset + 4])?;
-            let entry_len = BigEndian::read_i32(&value[offset + 4..offset + 8]) as usize;
-            offset += 8;
-
-            let actual_len = entry_len.min(SecureBufferEntry::SIZE);
-            let data = Value::String(
-                String::from_utf8_lossy(&value[offset..offset + actual_len]).to_string(),
-            );
-            offset += SecureBufferEntry::SIZE;
-
+        let record_size = 8 + SecureBufferEntry::SIZE;
+        if !value.len().is_multiple_of(record_size) {
+            return Err(CryptoengError::ParseError(
+                "incomplete secure buffer record".into(),
+            ));
+        }
+        let mut entries = Vec::with_capacity(value.len() / record_size);
+        for record in value.chunks_exact(record_size) {
+            let entry_type = InfoType::try_from(&record[..4])?;
+            let entry_len = usize::try_from(BigEndian::read_i32(&record[4..8]))
+                .map_err(|_| CryptoengError::ParseError("negative secure record length".into()))?;
+            if entry_len > SecureBufferEntry::SIZE {
+                return Err(CryptoengError::ParseError(
+                    "secure record exceeds fixed slot".into(),
+                ));
+            }
+            let bytes = &record[8..8 + entry_len];
+            let data = if matches!(entry_type, InfoType::Email | InfoType::EmailEx1) {
+                Value::String(
+                    std::str::from_utf8(bytes)
+                        .map_err(|_| CryptoengError::ParseError("invalid email encoding".into()))?
+                        .to_owned(),
+                )
+            } else {
+                Value::Buffer(bytes.to_vec())
+            };
             entries.push(SecureBufferEntry {
                 ty: entry_type,
                 value: data,
@@ -314,7 +329,6 @@ pub enum Value {
     InfoType(InfoType),
     SecureBuffer(SecureBuffer),
     Integer(i32),
-    Boolean(bool),
     String(String),
     Buffer(Vec<u8>),
 }
@@ -326,7 +340,6 @@ impl std::fmt::Display for Value {
             Value::PasswordQuality(q) => write!(f, "{:?}", q),
             Value::InfoType(v) => write!(f, "{:?}", v),
             Value::Integer(i) => write!(f, "{}", i),
-            Value::Boolean(b) => write!(f, "{}", b),
             Value::String(s) => write!(f, "{}", s),
             Value::SecureBuffer(buf) => {
                 write!(f, "SecureBuffer {{")?;
@@ -357,20 +370,14 @@ impl Value {
             MethodParamType::PmsVerifyTypeT | MethodParamType::PmsInfoTypeT => {
                 Ok(Value::InfoType(InfoType::try_from(buf)?))
             }
-            MethodParamType::PmsHideEmailT => {
-                if buf.len() == 4 {
-                    // Incoming requests: boolean flag (0 or 1)
-                    Ok(Value::Boolean(BigEndian::read_i32(buf) != 0))
-                } else {
-                    Ok(Value::String(String::from_utf8_lossy(buf).to_string()))
-                }
-            }
             MethodParamType::PmsAccountName => {
+                // Outgoing responses: email string
+                // TODO: Send empty if incoming value was false
                 Ok(Value::String(String::from_utf8_lossy(buf).to_string()))
             }
             MethodParamType::PmsPwdRetryCountLeftT
             | MethodParamType::PmsSecureQuestionRetryCountLeftT => {
-                if buf.len() < 4 {
+                if buf.len() != 4 {
                     return Err(CryptoengError::ParameterBufferTooShort {
                         param: ty,
                         expected: 4,
@@ -406,11 +413,6 @@ impl Value {
             Value::Integer(i) => {
                 let mut buf = [0u8; 4];
                 BigEndian::write_i32(&mut buf, *i);
-                Cow::Owned(buf.to_vec())
-            }
-            Value::Boolean(b) => {
-                let mut buf = [0u8; 4];
-                BigEndian::write_i32(&mut buf, if *b { 1 } else { 0 });
                 Cow::Owned(buf.to_vec())
             }
             Value::SecureBuffer(buf) => {
