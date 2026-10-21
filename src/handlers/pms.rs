@@ -388,7 +388,7 @@ fn delete(
 fn handle_pms_get_info(
     request: &dyn CryptoengRequest,
     storage: &mut Storage,
-    _runtime: &mut RuntimeState,
+    runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
     let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
         Value::SystemType(ty) => *ty,
@@ -398,60 +398,81 @@ fn handle_pms_get_info(
             ));
         }
     };
+
     require_privacy_system(system_type)?;
-
-    let privacy_data = storage
+    if !storage
         .get_privacy_data(system_type)
-        .cloned()
-        .unwrap_or_default();
-
-    info!(
-        ?system_type,
-        enrolled = privacy_data.enrolled,
-        password_type = ?privacy_data.password_type,
-        retry_count = privacy_data.retry_count,
-        "GetInfo"
-    );
-
+        .is_some_and(|data| data.enrolled)
+    {
+        return Ok(ResponseBuilder::standard(request.method_type())
+            .add_param(Parameter::new(
+                MethodParamType::PmsPwdTypeT,
+                &0i32.to_be_bytes(),
+            )?)
+            .build());
+    }
+    let latest = request
+        .get_param(MethodParamType::PmsLatestSecureRulesT)
+        .is_ok_and(|parameter| parameter.value().as_bytes().as_ref() == 10000i32.to_be_bytes());
+    let now = runtime.now()?;
+    let privacy_data = storage.get_privacy_data_mut(system_type);
     let mut builder = ResponseBuilder::standard(request.method_type())
         .add_param(Parameter::new(
             MethodParamType::PmsPwdTypeT,
             &(privacy_data.password_type as i32).to_be_bytes(),
         )?)
         .add_param(Parameter::new(
-            MethodParamType::PmsPwdRetryCountLeftT,
-            &privacy_data.retry_count.to_be_bytes(),
-        )?)
-        .add_param(Parameter::new(
-            MethodParamType::PmsPwdLockTimeLeftT,
-            &privacy_data.lock_time_remaining().to_be_bytes(),
-        )?)
-        .add_param(Parameter::new(
-            MethodParamType::PmsSecureQuestionRetryCountLeftT,
-            &privacy_data.secure_question_retry_count.to_be_bytes(),
-        )?)
-        .add_param(Parameter::new(
-            MethodParamType::PmsSecureQuestionLockTimeLeftT,
-            &privacy_data
-                .secure_question_lock_time_remaining()
-                .to_be_bytes(),
-        )?);
-
-    if !privacy_data.handler.is_empty() {
-        builder = builder.add_param(Parameter::new(
             MethodParamType::PmsHandlerT,
             &privacy_data.handler,
         )?);
+    if !privacy_data.email.is_empty() {
+        let hide_email =
+            !request
+                .get_param(MethodParamType::PmsHideEmailT)
+                .is_ok_and(|parameter| {
+                    matches!(parameter.value().as_bytes().as_ref(), [0] | [0, 0, 0, 0])
+                });
+        let email = if hide_email {
+            hidden_email(privacy_data.email.as_bytes())?
+        } else {
+            validate_email(privacy_data.email.as_bytes())?;
+            privacy_data.email.as_bytes().to_vec()
+        };
+        builder = builder.add_param(Parameter::new(MethodParamType::PmsHideEmailT, &email)?);
     }
 
-    if !privacy_data.email.is_empty() {
+    let changed = !latest && privacy_data.refresh_legacy_retries(&now);
+    let (password_retries, password_lock) =
+        privacy_data.retry_status(InfoType::Password, &now, latest);
+    let (answer_retries, answer_lock) =
+        privacy_data.retry_status(InfoType::SecurityQuestion, &now, latest);
+    if !latest || password_lock > 0 {
         builder = builder.add_param(Parameter::new(
-            MethodParamType::PmsHideEmailT,
-            privacy_data.email.as_bytes(),
+            MethodParamType::PmsPwdLockTimeLeftT,
+            &lock_time_bytes(password_lock),
         )?);
     }
-
-    Ok(builder.build())
+    if latest && answer_lock > 0 {
+        builder = builder.add_param(Parameter::new(
+            MethodParamType::PmsSecureQuestionLockTimeLeftT,
+            &lock_time_bytes(answer_lock),
+        )?);
+    }
+    builder = builder.add_param(Parameter::new(
+        MethodParamType::PmsPwdRetryCountLeftT,
+        &password_retries.to_be_bytes(),
+    )?);
+    if latest {
+        builder = builder.add_param(Parameter::new(
+            MethodParamType::PmsSecureQuestionRetryCountLeftT,
+            &answer_retries.to_be_bytes(),
+        )?);
+    }
+    let response = builder.build();
+    if changed {
+        storage.save()?;
+    }
+    Ok(response)
 }
 
 fn credential_matches(data: &crate::storage::PrivacyData, kind: InfoType, provided: &[u8]) -> bool {
@@ -488,6 +509,33 @@ fn validate_challenge(
         return Err(CryptoengError::ChallengeExpired);
     }
     Ok(())
+}
+
+fn lock_time_bytes(seconds: i32) -> [u8; 8] {
+    let mut bytes = [0; 8];
+    bytes[..4].copy_from_slice(&seconds.to_be_bytes());
+    bytes
+}
+
+fn validate_email(email: &[u8]) -> Result<usize> {
+    let prefix = email
+        .iter()
+        .position(|byte| *byte == b'@')
+        .ok_or(CryptoengError::InvalidEmail)?;
+    if prefix == 0 || prefix + 1 == email.len() || email[prefix + 1..].contains(&b'@') {
+        return Err(CryptoengError::InvalidEmail);
+    }
+    Ok(prefix)
+}
+
+fn hidden_email(email: &[u8]) -> Result<Vec<u8>> {
+    let prefix = validate_email(email)?;
+    if prefix < 2 {
+        return Ok(Vec::new());
+    }
+    let mut hidden = email.to_vec();
+    hidden[prefix / 4 + 1..prefix].fill(b'*');
+    Ok(hidden)
 }
 
 fn require_privacy_system(system: crate::SystemType) -> Result<()> {

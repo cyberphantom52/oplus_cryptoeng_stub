@@ -2,7 +2,8 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
     aead::{Aead, KeyInit},
 };
-use chrono::{DateTime, Duration, Utc};
+
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -196,50 +197,6 @@ impl PrivacyData {
         self.secure_question_retry_count = 5;
         self.lock_until = None;
         self.secure_question_lock_until = None;
-    }
-
-    /// Returns the remaining lock time in seconds, or 0 if not locked
-    pub fn lock_time_remaining(&self) -> i32 {
-        self.lock_until
-            .map(|until| (until - Utc::now()).num_seconds().max(0) as i32)
-            .unwrap_or(0)
-    }
-
-    /// Returns the remaining secure question lock time in seconds, or 0 if not locked
-    pub fn secure_question_lock_time_remaining(&self) -> i32 {
-        self.secure_question_lock_until
-            .map(|until| (until - Utc::now()).num_seconds().max(0) as i32)
-            .unwrap_or(0)
-    }
-
-    /// Sets the password lock for the given duration in seconds
-    pub fn set_lock(&mut self, seconds: i32) {
-        if seconds > 0 {
-            self.lock_until = Some(Utc::now() + Duration::seconds(seconds as i64));
-        } else {
-            self.lock_until = None;
-        }
-    }
-
-    /// Sets the secure question lock for the given duration in seconds
-    #[allow(dead_code)]
-    pub fn set_secure_question_lock(&mut self, seconds: i32) {
-        if seconds > 0 {
-            self.secure_question_lock_until = Some(Utc::now() + Duration::seconds(seconds as i64));
-        } else {
-            self.secure_question_lock_until = None;
-        }
-    }
-
-    /// Returns true if the account is locked
-    pub fn is_locked(&self) -> bool {
-        self.lock_time_remaining() > 0
-    }
-
-    /// Returns true if secure question is locked
-    #[allow(dead_code)]
-    pub fn is_secure_question_locked(&self) -> bool {
-        self.secure_question_lock_time_remaining() > 0
     }
 }
 
