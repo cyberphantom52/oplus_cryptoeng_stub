@@ -306,10 +306,7 @@ impl Storage {
         let dir = PathBuf::from(STORAGE_DIR);
         fs::create_dir_all(&dir).map_err(StorageError::CreateDir)?;
 
-        // Serialize first (immutable borrow), then get key (mutable borrow)
-        let json = serde_json::to_string_pretty(&*self).map_err(StorageError::Serialize)?;
-        let key = self.key()?;
-        let encrypted = encrypt_data(key, json.as_bytes())?;
+        let encrypted = self.encode()?;
 
         let file_path = dir.join("storage.dat");
         atomic_write(&file_path, &encrypted).map_err(StorageError::Write)?;
@@ -317,16 +314,17 @@ impl Storage {
         Ok(())
     }
 
-    /// Encrypt arbitrary data using the storage key
-    pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>> {
-        let key = self.key()?;
-        Ok(encrypt_data(key, plaintext)?)
+    fn encode(&mut self) -> Result<Vec<u8>> {
+        let json = serde_json::to_vec_pretty(&*self).map_err(StorageError::Serialize)?;
+        Ok(encrypt_data(self.key()?, &json)?)
     }
 
-    /// Decrypt arbitrary data using the storage key
-    pub fn decrypt(&mut self, data: &[u8]) -> Result<Vec<u8>> {
-        let key = self.key()?;
-        Ok(decrypt_data(key, data)?)
+    fn decode(key: Key<Aes256Gcm>, encrypted: &[u8]) -> Result<Self> {
+        let plaintext = decrypt_data(&key, encrypted)?;
+        let mut storage: Self =
+            serde_json::from_slice(&plaintext).map_err(StorageError::Deserialize)?;
+        storage.encryption_key = Some(key);
+        Ok(storage)
     }
 
     pub fn get_privacy_data(&self, system_type: SystemType) -> Option<&PrivacyData> {
@@ -335,10 +333,6 @@ impl Storage {
 
     pub fn get_privacy_data_mut(&mut self, system_type: SystemType) -> &mut PrivacyData {
         self.privacy_data.entry(system_type as i32).or_default()
-    }
-
-    pub fn store_secret(&mut self, length: i32, secret: Vec<u8>) {
-        self.secrets.insert(length, secret);
     }
 
     pub fn reset_privacy_data(&mut self, system_type: SystemType) {
