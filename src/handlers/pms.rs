@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tracing::{info, warn};
@@ -70,28 +68,17 @@ fn enroll(
     };
     if buffer.entries.is_empty()
         || buffer.entries.len() > 6
-        || !buffer.entries.iter().any(|entry| {
-            entry.ty == InfoType::SecurityQuestion && entry.value.as_bytes().len() == 32
-        })
-        || buffer.entries.iter().any(|entry| {
-            !matches!(
-                entry.ty,
-                InfoType::Email | InfoType::EmailEx1 | InfoType::SecurityQuestion
-            ) || entry.value.as_bytes().is_empty()
-                || (entry.ty == InfoType::SecurityQuestion && entry.value.as_bytes().len() != 32)
-        })
+        || !buffer
+            .entries
+            .iter()
+            .any(|entry| entry.ty == InfoType::SecurityQuestion as i32)
+        || buffer
+            .entries
+            .iter()
+            .any(|entry| entry.ty == 0 || entry.declared_len == 0)
     {
         return Err(CryptoengError::ParseError(
             "invalid recovery records".into(),
-        ));
-    }
-
-    let mut seen = HashSet::new();
-    if buffer.entries.iter().any(|entry| !seen.insert(entry.ty))
-        || (seen.contains(&InfoType::EmailEx1) && !seen.contains(&InfoType::Email))
-    {
-        return Err(CryptoengError::ParseError(
-            "duplicate or orphaned recovery records".into(),
         ));
     }
     let privacy_data = storage.get_privacy_data_mut(system_type);
@@ -101,36 +88,7 @@ fn enroll(
     privacy_data.password_type = password_type;
     privacy_data.password_hash = pwd_info.value().as_bytes().to_vec();
 
-    // Parse email from PmsSecureInfoBufferT if present
-    if let Ok(secure_info) = request.get_param(MethodParamType::PmsSecureInfoBufferT)
-        && let Value::SecureBuffer(secure_buffer) = secure_info.value()
-    {
-        let mut email_first: Option<String> = None;
-        let mut email_continuation: Option<String> = None;
-
-        for entry in secure_buffer.entries.iter() {
-            match (&entry.ty, &entry.value) {
-                (InfoType::Email, Value::String(s)) => {
-                    email_first = Some(s.trim_end_matches('\0').to_string());
-                }
-                (InfoType::EmailEx1, Value::String(s)) => {
-                    email_continuation = Some(s.trim_end_matches('\0').to_string());
-                }
-                (InfoType::SecurityQuestion, Value::Buffer(answer)) if answer.len() == 32 => {
-                    privacy_data.security_answer_hash = answer.clone();
-                }
-                _ => continue,
-            }
-        }
-
-        if let Some(first) = email_first {
-            privacy_data.email = match email_continuation {
-                Some(cont) => format!("{}{}", first, cont),
-                None => first,
-            };
-            info!("Email saved during enroll");
-        }
-    }
+    privacy_data.recovery_records = buffer.entries.clone();
 
     privacy_data.handler = generate_random_bytes(8);
     privacy_data.enrolled = true;
@@ -297,20 +255,17 @@ fn modify(
         .and_then(|data| data.authorization.as_ref())
         .ok_or(CryptoengError::ChallengeMismatch(system_type))?;
     validate_challenge(&challenge, pending, system_type, &runtime.now()?, 300_000)?;
-    let email = // Handle different info types
-match info_type {
-        InfoType::Password | InfoType::SecurityQuestion if information.len() == 32 => None,
-        InfoType::Email if information.len() <= 64 => Some(
-            std::str::from_utf8(&information)
-                .map_err(|_| CryptoengError::ParseError("invalid email encoding".into()))?
-                .to_owned(),
-        ),
+    // Handle different info types
+    match info_type {
+        InfoType::Password if information.len() == 32 => {}
+        InfoType::SecurityQuestion if (1..=32).contains(&information.len()) => {}
+        InfoType::Email if (1..=64).contains(&information.len()) => {}
         _ => {
             return Err(CryptoengError::ParseError(
                 "unsupported modification information".into(),
             ));
         }
-    };
+    }
     let privacy_data = storage.get_privacy_data_mut(system_type);
     if !privacy_data.enrolled {
         return Err(CryptoengError::NotEnrolled(system_type));
@@ -318,10 +273,8 @@ match info_type {
     if info_type == InfoType::Password {
         privacy_data.password_type = password_type;
     }
-    if let Some(email) = email {
-        privacy_data.email = email;
-    } else if info_type == InfoType::SecurityQuestion {
-        privacy_data.security_answer_hash = information.into_owned();
+    if matches!(info_type, InfoType::SecurityQuestion | InfoType::Email) {
+        privacy_data.modify_recovery_info(info_type, &information)?;
     } else {
         privacy_data.password_hash = information.into_owned();
     }
@@ -405,9 +358,7 @@ fn handle_pms_get_info(
             )?)
             .build());
     }
-    let latest = request
-        .get_param(MethodParamType::PmsLatestSecureRulesT)
-        .is_ok_and(|parameter| parameter.value().as_bytes().as_ref() == 10000i32.to_be_bytes());
+    let latest = optional_word(request, MethodParamType::PmsLatestSecureRulesT) == Some(10000);
     let now = runtime.now()?;
     let privacy_data = storage.get_privacy_data_mut(system_type);
     let mut builder = ResponseBuilder::standard(request.method_type())
@@ -419,18 +370,14 @@ fn handle_pms_get_info(
             MethodParamType::PmsHandlerT,
             &privacy_data.handler,
         )?);
-    if !privacy_data.email.is_empty() {
-        let hide_email =
-            !request
-                .get_param(MethodParamType::PmsHideEmailT)
-                .is_ok_and(|parameter| {
-                    matches!(parameter.value().as_bytes().as_ref(), [0] | [0, 0, 0, 0])
-                });
+    if let Some(email) = privacy_data.recovery_email() {
+        let email = email.split(|byte| *byte == 0).next().unwrap_or_default();
+        let hide_email = optional_word(request, MethodParamType::PmsHideEmailT) != Some(0);
         let email = if hide_email {
-            hidden_email(privacy_data.email.as_bytes())?
+            hidden_email(email)?
         } else {
-            validate_email(privacy_data.email.as_bytes())?;
-            privacy_data.email.as_bytes().to_vec()
+            validate_email(email)?;
+            email.to_vec()
         };
         builder = builder.add_param(Parameter::new(MethodParamType::PmsHideEmailT, &email)?);
     }
@@ -469,6 +416,15 @@ fn handle_pms_get_info(
     Ok(response)
 }
 
+fn optional_word(request: &dyn CryptoengRequest, kind: MethodParamType) -> Option<i32> {
+    let parameter = request.get_param(kind).ok()?;
+    let bytes = parameter.value().as_bytes();
+    let mut word = [0; 4];
+    let count = bytes.len().min(word.len());
+    word[..count].copy_from_slice(&bytes[..count]);
+    Some(i32::from_be_bytes(word))
+}
+
 fn credential_matches(data: &crate::storage::PrivacyData, kind: InfoType, provided: &[u8]) -> bool {
     if provided.len() != 32 {
         return false;
@@ -480,6 +436,13 @@ fn credential_matches(data: &crate::storage::PrivacyData, kind: InfoType, provid
             hasher.update(&data.handler);
             bool::from(provided.ct_eq(hasher.finalize().as_slice()))
         }
+        InfoType::SecurityQuestion if !data.recovery_records.is_empty() => data
+            .recovery_records
+            .iter()
+            .filter(|entry| entry.ty == InfoType::SecurityQuestion as i32)
+            .fold(false, |matched, entry| {
+                matched | bool::from(provided.ct_eq(&entry.payload))
+            }),
         InfoType::SecurityQuestion => {
             data.security_answer_hash.len() == 32
                 && bool::from(provided.ct_eq(&data.security_answer_hash))

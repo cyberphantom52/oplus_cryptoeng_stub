@@ -47,6 +47,9 @@ pub enum CryptoengError {
     #[error("invalid parameter value {value} for {param:?}")]
     InvalidParameterData { param: MethodParamType, value: i32 },
 
+    #[error("malformed parameter: {0:?}")]
+    MalformedParameter(MethodParamType),
+
     /// Unknown or unsupported method type.
     #[error("unknown method type: {0:?}")]
     UnknownMethod(MethodType),
@@ -58,6 +61,9 @@ pub enum CryptoengError {
     /// User is not enrolled in the privacy management system.
     #[error("user not enrolled for system type {0:?}")]
     NotEnrolled(SystemType),
+
+    #[error("recovery slots are full")]
+    RecoverySlotsFull,
 
     #[error("already enrolled for system type {0:?}")]
     AlreadyEnrolled(SystemType),
@@ -153,7 +159,9 @@ impl CryptoengError {
             Self::MissingParameter(parameter) => Some(10100 + *parameter as i32),
             Self::ParameterBufferTooShort { .. }
             | Self::InvalidParameterData { .. }
+            | Self::MalformedParameter(_)
             | Self::ParseError(_) => Some(10014),
+            Self::RecoverySlotsFull => Some(10027),
             Self::AlreadyEnrolled(_) => Some(10031),
             Self::InvalidEmail => Some(10001),
             Self::VerificationFailed { .. } => Some(10017),

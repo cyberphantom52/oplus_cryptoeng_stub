@@ -274,10 +274,11 @@ impl TryFrom<&[u8]> for SystemType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecureBufferEntry {
-    pub ty: InfoType,
-    pub value: Value,
+    pub ty: i32,
+    pub declared_len: u32,
+    pub payload: [u8; 32],
 }
 
 impl SecureBufferEntry {
@@ -295,33 +296,24 @@ impl TryFrom<&[u8]> for SecureBuffer {
     fn try_from(value: &[u8]) -> Result<Self> {
         let record_size = 8 + SecureBufferEntry::SIZE;
         if !value.len().is_multiple_of(record_size) {
-            return Err(CryptoengError::ParseError(
-                "incomplete secure buffer record".into(),
+            return Err(CryptoengError::MalformedParameter(
+                MethodParamType::PmsSecureInfoBufferT,
             ));
         }
         let mut entries = Vec::with_capacity(value.len() / record_size);
         for record in value.chunks_exact(record_size) {
-            let entry_type = InfoType::try_from(&record[..4])?;
-            let entry_len = usize::try_from(BigEndian::read_i32(&record[4..8]))
-                .map_err(|_| CryptoengError::ParseError("negative secure record length".into()))?;
-            if entry_len > SecureBufferEntry::SIZE {
-                return Err(CryptoengError::ParseError(
-                    "secure record exceeds fixed slot".into(),
+            let declared_len = BigEndian::read_u32(&record[4..8]);
+            if declared_len > SecureBufferEntry::SIZE as u32 {
+                return Err(CryptoengError::MalformedParameter(
+                    MethodParamType::PmsSecureInfoBufferT,
                 ));
             }
-            let bytes = &record[8..8 + entry_len];
-            let data = if matches!(entry_type, InfoType::Email | InfoType::EmailEx1) {
-                Value::String(
-                    std::str::from_utf8(bytes)
-                        .map_err(|_| CryptoengError::ParseError("invalid email encoding".into()))?
-                        .to_owned(),
-                )
-            } else {
-                Value::Buffer(bytes.to_vec())
-            };
+            let mut payload = [0; SecureBufferEntry::SIZE];
+            payload.copy_from_slice(&record[8..]);
             entries.push(SecureBufferEntry {
-                ty: entry_type,
-                value: data,
+                ty: BigEndian::read_i32(&record[..4]),
+                declared_len,
+                payload,
             });
         }
         Ok(SecureBuffer { entries })
@@ -435,19 +427,9 @@ impl Value {
             Value::SecureBuffer(buf) => {
                 let mut result = Vec::new();
                 for entry in &buf.entries {
-                    let mut entry_buf = [0u8; 4];
-                    BigEndian::write_i32(&mut entry_buf, entry.ty as i32);
-                    result.extend_from_slice(&entry_buf);
-
-                    let value_bytes = entry.value.as_bytes();
-                    let actual_len = value_bytes.len().min(SecureBufferEntry::SIZE);
-                    let mut len_buf = [0u8; 4];
-                    BigEndian::write_i32(&mut len_buf, actual_len as i32);
-                    result.extend_from_slice(&len_buf);
-
-                    let mut data_buf = [0u8; SecureBufferEntry::SIZE];
-                    data_buf[..actual_len].copy_from_slice(&value_bytes[..actual_len]);
-                    result.extend_from_slice(&data_buf);
+                    result.extend_from_slice(&entry.ty.to_be_bytes());
+                    result.extend_from_slice(&entry.declared_len.to_be_bytes());
+                    result.extend_from_slice(&entry.payload);
                 }
                 Cow::Owned(result)
             }

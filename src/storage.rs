@@ -17,7 +17,7 @@ use zeroize::Zeroizing;
 use crate::{
     PasswordQuality, SystemType,
     error::{Result, StorageError},
-    types::parameter::InfoType,
+    types::parameter::{InfoType, SecureBufferEntry},
 };
 
 /// Storage directory for persistent data
@@ -35,6 +35,8 @@ pub struct PrivacyData {
     pub password_hash: Vec<u8>,
     #[serde(default)]
     pub security_answer_hash: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recovery_records: Vec<SecureBufferEntry>,
     pub email: String,
     pub handler: Vec<u8>,
     pub retry_count: i32,
@@ -128,6 +130,84 @@ impl RetryRecord {
 }
 
 impl PrivacyData {
+    pub fn recovery_email(&self) -> Option<Vec<u8>> {
+        if self.recovery_records.is_empty() {
+            return (!self.email.is_empty()).then(|| self.email.as_bytes().to_vec());
+        }
+        let first = self
+            .recovery_records
+            .iter()
+            .find(|entry| entry.ty == InfoType::Email as i32)?;
+        let mut email = first.payload.to_vec();
+        if let Some(continuation) = self
+            .recovery_records
+            .iter()
+            .find(|entry| entry.ty == InfoType::EmailEx1 as i32)
+        {
+            email.extend_from_slice(&continuation.payload);
+        }
+        Some(email)
+    }
+
+    pub fn modify_recovery_info(&mut self, kind: InfoType, information: &[u8]) -> Result<()> {
+        let mut records = self.recovery_records.clone();
+        if records.is_empty() {
+            if self.security_answer_hash.len() == 32 {
+                records.push(recovery_record(
+                    InfoType::SecurityQuestion,
+                    &self.security_answer_hash,
+                ));
+            }
+            for (index, bytes) in self.email.as_bytes().chunks(32).enumerate() {
+                records.push(recovery_record(
+                    if index == 0 {
+                        InfoType::Email
+                    } else {
+                        InfoType::EmailEx1
+                    },
+                    bytes,
+                ));
+            }
+        }
+        let slot = |records: &mut Vec<SecureBufferEntry>, kind: InfoType| -> Result<usize> {
+            if let Some(index) = records
+                .iter()
+                .position(|entry| entry.ty == 0 || entry.ty == kind as i32)
+            {
+                return Ok(index);
+            }
+            if records.len() == 6 {
+                return Err(if kind == InfoType::SecurityQuestion {
+                    crate::error::CryptoengError::ParseError("no recovery slot available".into())
+                } else {
+                    crate::error::CryptoengError::RecoverySlotsFull
+                });
+            }
+            records.push(SecureBufferEntry {
+                ty: 0,
+                declared_len: 0,
+                payload: [0; 32],
+            });
+            Ok(records.len() - 1)
+        };
+        let index = slot(&mut records, kind)?;
+        records[index] = recovery_record(kind, &information[..information.len().min(32)]);
+        if kind == InfoType::Email {
+            let continuation = slot(&mut records, InfoType::EmailEx1)?;
+            records[continuation] = if information.len() > 32 {
+                recovery_record(InfoType::EmailEx1, &information[32..])
+            } else {
+                SecureBufferEntry {
+                    ty: 0,
+                    declared_len: 0,
+                    payload: [0; 32],
+                }
+            };
+        }
+        self.recovery_records = records;
+        Ok(())
+    }
+
     pub fn refresh_legacy_retries(&mut self, now: &BootTimestamp) -> bool {
         let password = self.retry(InfoType::Password, now);
         if password.failures >= 5 && password.status(now, false).1 == 0 {
@@ -195,6 +275,16 @@ impl PrivacyData {
         self.secure_question_retry_count = 5;
         self.lock_until = None;
         self.secure_question_lock_until = None;
+    }
+}
+
+fn recovery_record(kind: InfoType, bytes: &[u8]) -> SecureBufferEntry {
+    let mut payload = [0; 32];
+    payload[..bytes.len()].copy_from_slice(bytes);
+    SecureBufferEntry {
+        ty: kind as i32,
+        declared_len: bytes.len() as u32,
+        payload,
     }
 }
 
