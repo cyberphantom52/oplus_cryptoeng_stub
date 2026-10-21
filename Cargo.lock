@@ -77,17 +77,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "async-trait"
-version = "0.1.89"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -775,7 +764,6 @@ name = "oplus_cryptoeng_stub"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
- "async-trait",
  "base64",
  "byteorder",
  "chrono",
@@ -971,17 +959,14 @@ version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "18ad2f400ecd86094d28e83c9aaf830e5916c052091820717b56cac7fc1c11af"
 dependencies = [
- "async-trait",
  "libc",
  "log",
  "miette",
  "pretty-hex",
  "rsbinder-aidl",
  "rsbinder-fmq",
- "rsbinder-macros",
  "rsproperties",
  "rustix 1.1.4",
- "tokio",
 ]
 
 [[package]]
@@ -1007,18 +992,6 @@ dependencies = [
  "libc",
  "log",
  "rustix 1.1.4",
-]
-
-[[package]]
-name = "rsbinder-macros"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6a399f3aecb008513076bd4b7110e67df3fee60d96decbde83dd2b7b4d283ba"
-dependencies = [
- "proc-macro2",
- "quote",
- "rsbinder-aidl",
- "syn 3.0.9",
 ]
 
 [[package]]
@@ -1309,15 +1282,6 @@ dependencies = [
  "displaydoc",
  "serde_core",
  "zerovec",
-]
-
-[[package]]
-name = "tokio"
-version = "1.54.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0c168a474b95bfecfe908a65d4bdffc523144b649a74c09c286afb35d53e0bc"
-dependencies = [
- "pin-project-lite",
 ]
 
 [[package]]
