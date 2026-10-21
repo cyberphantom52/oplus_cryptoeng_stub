@@ -11,7 +11,7 @@ use std::{
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
 };
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::{
     PasswordQuality, SystemType,
@@ -143,26 +143,45 @@ impl RuntimeState {
 /// Encryption key manager — loads or generates the AES-256 key
 fn load_or_create_key() -> std::result::Result<Key<Aes256Gcm>, StorageError> {
     let key_path = PathBuf::from(STORAGE_DIR).join("storage.key");
-
-    if key_path.exists() {
-        let key_bytes = fs::read(&key_path).map_err(StorageError::Read)?;
-        if key_bytes.len() != KEY_SIZE {
-            warn!("Corrupt storage key (wrong size), regenerating");
-            let key = generate_and_save_key(&key_path)?;
-            return Ok(key);
+    match fs::read(&key_path) {
+        Ok(key_bytes) => {
+            if key_bytes.len() != KEY_SIZE {
+                return Err(StorageError::Crypto("invalid storage key length".into()));
+            }
+            Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
         }
-        Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
-    } else {
-        info!(path = %key_path.display(), "Generating new storage encryption key");
-        let key = generate_and_save_key(&key_path)?;
-        Ok(key)
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            match fs::read(Path::new(STORAGE_DIR).join("storage.dat")) {
+                Ok(_) => {
+                    return Err(StorageError::Crypto(
+                        "storage.key missing for existing encrypted storage".into(),
+                    ));
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(StorageError::Read(error)),
+            }
+            info!(path = %key_path.display(), "Generating new storage encryption key");
+            generate_and_save_key(&key_path)
+        }
+        Err(error) => Err(StorageError::Read(error)),
     }
 }
 
-fn generate_and_save_key(path: &PathBuf) -> std::result::Result<Key<Aes256Gcm>, StorageError> {
+fn generate_and_save_key(path: &Path) -> std::result::Result<Key<Aes256Gcm>, StorageError> {
     let key_bytes = generate_random_bytes(KEY_SIZE);
     fs::create_dir_all(STORAGE_DIR).map_err(StorageError::CreateDir)?;
-    fs::write(path, &key_bytes).map_err(StorageError::Write)?;
+
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(StorageError::Write)?;
+    file.write_all(&key_bytes).map_err(StorageError::Write)?;
+    file.sync_all().map_err(StorageError::Write)?;
+    File::open(STORAGE_DIR)
+        .and_then(|directory| directory.sync_all())
+        .map_err(StorageError::Write)?;
     Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
 }
 
@@ -237,6 +256,9 @@ pub struct Storage {
     /// Encryption key (not serialized — loaded separately)
     #[serde(skip)]
     encryption_key: Option<Key<Aes256Gcm>>,
+
+    #[serde(skip)]
+    persistence_failed: bool,
 }
 
 impl Storage {
@@ -252,57 +274,68 @@ impl Storage {
         Ok(self.encryption_key.as_ref().unwrap())
     }
 
-    pub fn load() -> Self {
-        let key = match load_or_create_key() {
-            Ok(k) => k,
-            Err(e) => {
-                warn!(error = %e, "Failed to load encryption key, starting fresh");
-                return Self::new();
-            }
-        };
+    pub fn load() -> Result<Self> {
+        let key = load_or_create_key()?;
 
         // Try encrypted format first (storage.dat)
         let dat_path = PathBuf::from(STORAGE_DIR).join("storage.dat");
-        if dat_path.exists() {
-            if let Ok(encrypted) = fs::read(&dat_path) {
-                match decrypt_data(&key, &encrypted) {
-                    Ok(plaintext) => {
-                        if let Ok(mut storage) = serde_json::from_slice::<Storage>(&plaintext) {
-                            storage.encryption_key = Some(key);
-                            info!(path = %dat_path.display(), "Loaded encrypted storage");
-                            return storage;
-                        }
-                    }
-                    Err(e) => warn!(error = %e, "Failed to decrypt storage.dat"),
-                }
+        match fs::read(&dat_path) {
+            Ok(encrypted) => {
+                let storage = Self::decode(key, &encrypted)?;
+                info!(path = %dat_path.display(), "Loaded encrypted storage");
+                return Ok(storage);
             }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(StorageError::Read(error).into()),
         }
 
         // Migrate from legacy plaintext format (storage.json)
         let json_path = PathBuf::from(STORAGE_DIR).join("storage.json");
-        if json_path.exists() {
-            if let Ok(content) = fs::read_to_string(&json_path) {
-                if let Ok(mut storage) = serde_json::from_str::<Storage>(&content) {
-                    storage.encryption_key = Some(key);
-                    info!("Migrating plaintext storage.json → encrypted storage.dat");
-                    if let Err(e) = storage.save() {
-                        warn!(error = %e, "Failed to save migrated storage");
-                    }
-
-                    // Remove old plaintext file after successful migration
-                    let _ = fs::remove_file(&json_path);
-                    return storage;
-                }
+        match fs::read(&json_path) {
+            Ok(content) => {
+                let mut storage: Self =
+                    serde_json::from_slice(&content).map_err(StorageError::Deserialize)?;
+                storage.encryption_key = Some(key);
+                info!("Migrating plaintext storage.json → encrypted storage.dat");
+                storage.save()?;
+                fs::remove_file(&json_path).map_err(StorageError::Write)?;
+                File::open(STORAGE_DIR)
+                    .and_then(|directory| directory.sync_all())
+                    .map_err(StorageError::Write)?;
+                return Ok(storage);
             }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(StorageError::Read(error).into()),
         }
 
         info!("Creating new encrypted storage");
         let mut storage = Self::new();
         storage.encryption_key = Some(key);
-        storage
+        Ok(storage)
     }
 
     pub fn save(&mut self) -> Result<()> {
+        self.ensure_available()?;
+
+        self.persistence_failed = true;
+        let result = self.save_inner();
+        if result.is_ok() {
+            self.persistence_failed = false;
+        }
+        result
+    }
+
+    pub fn ensure_available(&self) -> Result<()> {
+        if self.persistence_failed {
+            return Err(StorageError::Write(io::Error::other(
+                "storage unavailable after failed save; restart required",
+            ))
+            .into());
+        }
+        Ok(())
+    }
+
+    fn save_inner(&mut self) -> Result<()> {
         let dir = PathBuf::from(STORAGE_DIR);
         fs::create_dir_all(&dir).map_err(StorageError::CreateDir)?;
 

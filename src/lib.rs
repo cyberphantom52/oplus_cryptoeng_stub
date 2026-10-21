@@ -30,26 +30,21 @@ pub struct CryptoengService {
 }
 
 impl CryptoengService {
-    pub fn new() -> Self {
-        Self {
-            storage: Arc::new(RwLock::new(Storage::load())),
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            storage: Arc::new(RwLock::new(Storage::load()?)),
             runtime: Arc::new(RwLock::new(RuntimeState::new())),
-        }
+        })
     }
 
     fn handle_request(&self, data: &[u8]) -> Result<Vec<u8>> {
         let request = request::parse(data)?;
 
         let mut storage = self.storage.write()?;
+        storage.ensure_available()?;
         let mut runtime = self.runtime.write()?;
 
         handlers::dispatch(request.as_ref(), &mut storage, &mut runtime)
-    }
-}
-
-impl Default for CryptoengService {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

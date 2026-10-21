@@ -32,8 +32,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Start the thread pool
     ProcessState::start_thread_pool();
 
-    // Create and register the service
-    let service = BnCryptoeng::new_binder(CryptoengService::new());
+    let service = BnCryptoeng::new_binder(CryptoengService::new()?);
     hub::add_service(DESCRIPTOR, service.as_binder())?;
 
     info!(descriptor = DESCRIPTOR, "Cryptoeng service started");
