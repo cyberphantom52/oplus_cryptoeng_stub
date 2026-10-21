@@ -1,10 +1,12 @@
 mod certificate;
 mod credentials;
 mod error;
+mod keymint;
 mod metadata;
 mod request;
 
-use credentials::{CertificateError, Issuer, IssuerKind};
+pub use credentials::IssuerKind;
+use credentials::{CertificateError, Issuer};
 use error::PkiError;
 use metadata::{Metadata, parse_time};
 
@@ -107,9 +109,15 @@ fn certificate_status(error: CertificateError) -> PkiError {
             PkiError::CredentialsUnavailable
         }
         CertificateError::InvalidIssuer => PkiError::InvalidCredentials,
-        CertificateError::UnsupportedIssuer => PkiError::Unsupported,
 
         CertificateError::InvalidPublicKey => PkiError::InvalidPublicKey,
         CertificateError::Encoding | CertificateError::Signing => PkiError::Encoding,
+        CertificateError::KeyMint(error) => match error {
+            keymint::KeyMintError::InvalidMetadata | keymint::KeyMintError::InvalidSignature => {
+                PkiError::InvalidCredentials
+            }
+            keymint::KeyMintError::Encoding => PkiError::Encoding,
+            _ => PkiError::CredentialsUnavailable,
+        },
     }
 }

@@ -1,22 +1,18 @@
 use std::{fs::File, io::Read, os::unix::fs::MetadataExt};
 
-use p256::pkcs8::DecodePrivateKey;
-use rsa::{RsaPrivateKey, RsaPublicKey, signature::Keypair};
 use rustix::fs::{Mode, OFlags, open, openat};
 use thiserror::Error;
 use x509_cert::{
     Certificate,
-    der::{DecodePem, Encode},
-    spki::{DecodePublicKey, EncodePublicKey},
+    der::{EncodePem, pem::LineEnding},
 };
+
 use zeroize::Zeroizing;
 
-const CREDENTIAL_DIR: &str = "/data/vendor_de/0/cryptoeng/pki";
-const MAX_CREDENTIAL_BYTES: u64 = 16_384;
-
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum IssuerKind {
+pub enum IssuerKind {
     User,
+
     Group,
 }
 
@@ -28,22 +24,19 @@ pub(crate) enum CertificateError {
     InsecureFile,
     #[error("issuer key or certificate is invalid or mismatched")]
     InvalidIssuer,
-    #[error("issuer key algorithm is unsupported")]
-    UnsupportedIssuer,
+
     #[error("application public key is invalid or unsupported")]
     InvalidPublicKey,
     #[error("certificate encoding failed")]
     Encoding,
     #[error("certificate signing failed")]
     Signing,
+    #[error(transparent)]
+    KeyMint(#[from] super::keymint::KeyMintError),
 }
 
 pub(super) enum IssuerKey {
-    Rsa(rsa::pkcs1v15::SigningKey<sha2_11::Sha256>),
-    P224(p224::ecdsa::SigningKey),
-    P256(p256::ecdsa::SigningKey),
-    P384(p384::ecdsa::SigningKey),
-    P521(p521::ecdsa::SigningKey),
+    KeyMint(super::keymint::KeyMintSigner),
 }
 
 pub(crate) struct Issuer {
@@ -54,72 +47,14 @@ pub(crate) struct Issuer {
 
 impl Issuer {
     pub(crate) fn load(kind: IssuerKind) -> Result<Self, CertificateError> {
-        let directory = open_directory(CREDENTIAL_DIR)?;
-        let (key_name, cert_name) = match kind {
-            IssuerKind::User => ("udevice-key.pem", "udevice-cert.pem"),
-            IssuerKind::Group => ("gdevice-key.pem", "gdevice-cert.pem"),
-        };
-        let key = read_credential(&directory, key_name, true, MAX_CREDENTIAL_BYTES)?;
-        let certificate = read_credential(&directory, cert_name, false, MAX_CREDENTIAL_BYTES)?;
-        Self::from_pem(&key, &certificate)
-    }
-
-    pub(crate) fn from_pem(key: &str, cert: &str) -> Result<Self, CertificateError> {
-        if key.len() as u64 > MAX_CREDENTIAL_BYTES || cert.len() as u64 > MAX_CREDENTIAL_BYTES {
-            return Err(CertificateError::InvalidIssuer);
-        }
-        let certificate =
-            Certificate::from_pem(cert).map_err(|_| CertificateError::InvalidIssuer)?;
-        let public_der = certificate
-            .tbs_certificate()
-            .subject_public_key_info()
-            .to_der()
-            .map_err(|_| CertificateError::InvalidIssuer)?;
-        let key = if let Ok(private) = RsaPrivateKey::from_pkcs8_pem(key) {
-            private
-                .validate()
-                .map_err(|_| CertificateError::InvalidIssuer)?;
-            let public = RsaPublicKey::from_public_key_der(&public_der)
-                .map_err(|_| CertificateError::InvalidIssuer)?;
-            if public != RsaPublicKey::from(&private) {
-                return Err(CertificateError::InvalidIssuer);
-            }
-            IssuerKey::Rsa(rsa::pkcs1v15::SigningKey::new(private))
-        } else if let Ok(private) = p224::SecretKey::from_pkcs8_pem(key) {
-            let public = p224::PublicKey::from_public_key_der(&public_der)
-                .map_err(|_| CertificateError::InvalidIssuer)?;
-            if public != private.public_key() {
-                return Err(CertificateError::InvalidIssuer);
-            }
-            IssuerKey::P224(private.into())
-        } else if let Ok(private) = p256::SecretKey::from_pkcs8_pem(key) {
-            let public = p256::PublicKey::from_public_key_der(&public_der)
-                .map_err(|_| CertificateError::InvalidIssuer)?;
-            if public != private.public_key() {
-                return Err(CertificateError::InvalidIssuer);
-            }
-            IssuerKey::P256(private.into())
-        } else if let Ok(private) = p384::SecretKey::from_pkcs8_pem(key) {
-            let public = p384::PublicKey::from_public_key_der(&public_der)
-                .map_err(|_| CertificateError::InvalidIssuer)?;
-            if public != private.public_key() {
-                return Err(CertificateError::InvalidIssuer);
-            }
-            IssuerKey::P384(private.into())
-        } else if let Ok(private) = p521::SecretKey::from_pkcs8_pem(key) {
-            let public = p521::PublicKey::from_public_key_der(&public_der)
-                .map_err(|_| CertificateError::InvalidIssuer)?;
-            if public != private.public_key() {
-                return Err(CertificateError::InvalidIssuer);
-            }
-            IssuerKey::P521(private.into())
-        } else {
-            return Err(CertificateError::UnsupportedIssuer);
-        };
+        let (signer, certificate) = super::keymint::KeyMintSigner::load(kind)?;
+        let certificate_pem = certificate
+            .to_pem(LineEnding::LF)
+            .map_err(|_| CertificateError::Encoding)?;
         Ok(Self {
-            key,
+            key: IssuerKey::KeyMint(signer),
             certificate,
-            certificate_pem: cert.to_owned(),
+            certificate_pem,
         })
     }
 
@@ -138,11 +73,7 @@ impl Issuer {
 impl IssuerKey {
     pub(super) fn public_der(&self) -> Result<x509_cert::der::Document, x509_cert::spki::Error> {
         match self {
-            Self::Rsa(key) => key.verifying_key().to_public_key_der(),
-            Self::P224(key) => key.verifying_key().to_public_key_der(),
-            Self::P256(key) => key.verifying_key().to_public_key_der(),
-            Self::P384(key) => key.verifying_key().to_public_key_der(),
-            Self::P521(key) => key.verifying_key().to_public_key_der(),
+            Self::KeyMint(signer) => signer.public_der(),
         }
     }
 }
@@ -151,9 +82,9 @@ fn trusted_owner(uid: u32) -> bool {
     uid == 0 || uid == rustix::process::geteuid().as_raw()
 }
 
-fn open_directory(path: &str) -> Result<File, CertificateError> {
+fn open_directory() -> Result<File, CertificateError> {
     let directory: File = open(
-        path,
+        crate::storage::STORAGE_DIR,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )
@@ -167,18 +98,12 @@ fn open_directory(path: &str) -> Result<File, CertificateError> {
 }
 
 pub(super) fn read_metadata() -> Result<Zeroizing<String>, CertificateError> {
-    read_credential(
-        &open_directory(crate::storage::STORAGE_DIR)?,
-        "metadata.json",
-        false,
-        4096,
-    )
+    read_metadata_file(&open_directory()?, "metadata.json", 4096)
 }
 
-fn read_credential(
+fn read_metadata_file(
     directory: &File,
     name: &str,
-    secret: bool,
     max_bytes: u64,
 ) -> Result<Zeroizing<String>, CertificateError> {
     let file: File = openat(
@@ -190,11 +115,7 @@ fn read_credential(
     .map_err(std::io::Error::from)?
     .into();
     let metadata = file.metadata()?;
-    let forbidden_permissions = if secret { 0o007 } else { 0o002 };
-    if !metadata.is_file()
-        || metadata.mode() & forbidden_permissions != 0
-        || !trusted_owner(metadata.uid())
-    {
+    if !metadata.is_file() || metadata.mode() & 0o002 != 0 || !trusted_owner(metadata.uid()) {
         return Err(CertificateError::InsecureFile);
     }
     let mut contents = Zeroizing::new(String::new());
