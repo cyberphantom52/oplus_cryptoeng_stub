@@ -138,6 +138,12 @@ impl StorageFiles {
         result.map_err(StorageError::Write)
     }
 
+    pub(super) fn committed(&self) -> std::result::Result<Zeroizing<Vec<u8>>, StorageError> {
+        self.directory.sync_all().map_err(StorageError::Write)?;
+        self.read("storage.km", false)?
+            .ok_or_else(|| StorageError::Crypto("committed PMS storage is missing".into()))
+    }
+
     pub(super) fn commit_migration(&self, cipher: &EncryptionKey, plaintext: &[u8]) -> Result<()> {
         self.write(&cipher.encrypt(plaintext)?)?;
         self.verify_migration(cipher, plaintext)

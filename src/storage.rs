@@ -491,6 +491,22 @@ impl Storage {
     pub(crate) fn initialize_if_needed(&mut self) -> Result<()> {
         if matches!(self.persistence, PersistenceState::PendingInitialization) {
             *self = Self::load()?;
+        } else if matches!(self.persistence, PersistenceState::Failed) {
+            let encrypted = self
+                .files
+                .as_ref()
+                .ok_or_else(|| StorageError::Crypto("storage is not initialized".into()))?
+                .committed()?;
+            let plaintext = self
+                .encryption_key
+                .as_ref()
+                .ok_or_else(|| StorageError::Crypto("storage key is unavailable".into()))?
+                .decrypt(&encrypted)?;
+            let committed: Self =
+                serde_json::from_slice(&plaintext).map_err(StorageError::Deserialize)?;
+            self.privacy_data = committed.privacy_data;
+            self.secrets = committed.secrets;
+            self.persistence = PersistenceState::Ready;
         }
         Ok(())
     }
@@ -503,7 +519,7 @@ impl Storage {
             ))
             .into()),
             PersistenceState::Failed => Err(StorageError::Write(io::Error::other(
-                "storage unavailable after failed save; restart required",
+                "storage unavailable until committed state can be recovered",
             ))
             .into()),
         }
