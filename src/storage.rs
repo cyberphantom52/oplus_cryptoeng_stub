@@ -16,6 +16,7 @@ use tracing::info;
 use crate::{
     PasswordQuality, SystemType,
     error::{Result, StorageError},
+    types::parameter::InfoType,
     utils::generate_random_bytes,
 };
 
@@ -40,6 +41,10 @@ pub struct PrivacyData {
     pub retry_count: i32,
     pub secure_question_retry_count: i32,
     pub enrolled: bool,
+    #[serde(default)]
+    password_retry: Option<RetryRecord>,
+    #[serde(default)]
+    question_retry: Option<RetryRecord>,
 
     /// Timestamp when password lock expires (None = not locked)
     #[serde(default)]
@@ -64,8 +69,127 @@ impl BootTimestamp {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct RetryRecord {
+    failures: u32,
+    last_failed: Option<BootTimestamp>,
+}
+
+impl RetryRecord {
+    fn status(&self, now: &BootTimestamp, latest: bool) -> (i32, i32) {
+        let delay: u64 = if latest {
+            match self.failures {
+                5 => 60_000,
+                10 => 600_000,
+                15 => 1_800_000,
+                20.. => 3_600_000,
+                _ => 0,
+            }
+        } else if self.failures > 0 && self.failures.is_multiple_of(5) {
+            30_000
+        } else {
+            0
+        };
+
+        let elapsed = self
+            .last_failed
+            .as_ref()
+            .and_then(|previous| now.elapsed_since(previous));
+        let remaining = delay.saturating_sub(elapsed.unwrap_or(now.milliseconds));
+        let locked = remaining > 0;
+        let retries = if latest {
+            match self.failures {
+                0..=4 => 5 - self.failures,
+                5 | 10 | 15 => {
+                    if locked {
+                        0
+                    } else {
+                        5
+                    }
+                }
+                6..=9 => 10 - self.failures,
+                11..=14 => self.failures ^ 15,
+                16..=20 => 20 - self.failures,
+                _ => 0,
+            }
+        } else {
+            5u32.saturating_sub(self.failures)
+        };
+        (
+            retries as i32,
+            if locked {
+                (remaining / 1000 + 1) as i32
+            } else {
+                0
+            },
+        )
+    }
+}
+
 impl PrivacyData {
+    pub fn refresh_legacy_retries(&mut self, now: &BootTimestamp) -> bool {
+        let password = self.retry(InfoType::Password, now);
+        if password.failures >= 5 && password.status(now, false).1 == 0 {
+            password.failures %= 5;
+            self.retry_count = 5 - password.failures as i32;
+            self.question_retry = Some(RetryRecord::default());
+            self.secure_question_retry_count = 5;
+            self.lock_until = None;
+            self.secure_question_lock_until = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn retry_status(
+        &mut self,
+        kind: InfoType,
+        now: &BootTimestamp,
+        latest: bool,
+    ) -> (i32, i32) {
+        self.retry(kind, now).status(now, latest)
+    }
+
+    pub fn record_failure(&mut self, kind: InfoType, now: &BootTimestamp) -> i32 {
+        let record = self.retry(kind, now);
+        record.failures = record.failures.saturating_add(1);
+        record.last_failed = Some(now.clone());
+        let retries_left = record.status(now, true).0;
+        if kind == InfoType::Password {
+            self.retry_count = retries_left;
+        } else {
+            self.secure_question_retry_count = retries_left;
+        }
+        retries_left
+    }
+
+    fn retry(&mut self, kind: InfoType, now: &BootTimestamp) -> &mut RetryRecord {
+        let (record, retries_left, old_until) = if kind == InfoType::Password {
+            (&mut self.password_retry, self.retry_count, self.lock_until)
+        } else {
+            (
+                &mut self.question_retry,
+                self.secure_question_retry_count,
+                self.secure_question_lock_until,
+            )
+        };
+        record.get_or_insert_with(|| {
+            let remaining = old_until
+                .map(|until| (until - Utc::now()).num_milliseconds().clamp(0, 30_000) as u64);
+            RetryRecord {
+                failures: (5i64 - i64::from(retries_left)).clamp(0, 5) as u32,
+                last_failed: remaining.map(|remaining| BootTimestamp {
+                    boot_id: now.boot_id.clone(),
+                    milliseconds: now.milliseconds.saturating_sub(30_000 - remaining),
+                }),
+            }
+        })
+    }
+
     pub fn reset_retries(&mut self) {
+        self.password_retry = Some(RetryRecord::default());
+        self.question_retry = Some(RetryRecord::default());
         self.retry_count = 5;
         self.secure_question_retry_count = 5;
         self.lock_until = None;
