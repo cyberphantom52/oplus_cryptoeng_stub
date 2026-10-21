@@ -1,13 +1,14 @@
 use std::collections::HashSet;
 
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 use tracing::{info, warn};
 
 use crate::error::{CryptoengError, Result};
 use crate::register_handler;
 use crate::request::CryptoengRequest;
 use crate::response::ResponseBuilder;
-use crate::storage::{RuntimeState, Storage};
+use crate::storage::{PendingVerification, RuntimeState, Storage};
 use crate::types::method::MethodType;
 use crate::types::parameter::{InfoType, MethodParamType, Parameter, Value};
 use crate::utils::generate_random_bytes;
@@ -140,12 +141,26 @@ fn enroll(
     info!(?system_type, ?password_type, "User enrolled");
 
     let handler = privacy_data.handler.clone();
+    privacy_data.authorization = None;
     Ok(ResponseBuilder::standard(request.method_type())
         .add_param(Parameter::new(MethodParamType::PmsHandlerT, &handler)?)
         .build())
 }
 
 fn handle_pms_verify(
+    request: &dyn CryptoengRequest,
+    storage: &mut Storage,
+    runtime: &mut RuntimeState,
+) -> Result<Vec<u8>> {
+    let response = verify(request, storage, runtime);
+
+    if response.is_ok() || matches!(&response, Err(CryptoengError::VerificationFailed { .. })) {
+        storage.save()?;
+    }
+    response
+}
+
+fn verify(
     request: &dyn CryptoengRequest,
     storage: &mut Storage,
     runtime: &mut RuntimeState,
@@ -158,8 +173,8 @@ fn handle_pms_verify(
             ));
         }
     };
-    require_privacy_system(system_type)?;
 
+    require_privacy_system(system_type)?;
     let verify_type = match request.get_param(MethodParamType::PmsVerifyTypeT)?.value() {
         Value::InfoType(ty) => *ty,
         _ => {
@@ -169,17 +184,15 @@ fn handle_pms_verify(
         }
     };
 
-    let privacy_data = storage.get_privacy_data_mut(system_type);
-
-    // Check if locked using the new method
-    if privacy_data.is_locked() {
-        let lock_time = privacy_data.lock_time_remaining();
-        warn!(?system_type, lock_time, "Account is locked");
-        return Err(CryptoengError::AccountLocked {
-            system_type,
-            lock_time,
-        });
+    if verify_type == InfoType::Unspecified {
+        return Err(CryptoengError::ParseError(
+            "invalid verification type".into(),
+        ));
     }
+    if !matches!(verify_type, InfoType::Password | InfoType::SecurityQuestion) {
+        return Err(CryptoengError::UnsupportedOperation);
+    }
+    let privacy_data = storage.get_privacy_data_mut(system_type);
 
     // Check if enrolled
     if !privacy_data.enrolled {
@@ -189,58 +202,29 @@ fn handle_pms_verify(
 
     let verify_buffer = request.get_param(MethodParamType::PmsVerifyBufferT)?;
     let verify_data = verify_buffer.value().as_bytes();
+    if verify_data.len() != 32 {
+        return Err(CryptoengError::ParseError("invalid proof length".into()));
+    }
+    let now = runtime.now()?;
 
-    // Compute expected hash: SHA256(stored_password_hash + handler)
-    let mut combined = Vec::with_capacity(40);
-    combined.extend_from_slice(&privacy_data.password_hash);
-    combined.extend_from_slice(&privacy_data.handler);
-
-    let mut hasher = Sha256::new();
-    hasher.update(&combined);
-    let expected_hash = hasher.finalize();
-
-    // Compare the hashes
-    if verify_data.len() == 32 && verify_data[..] == expected_hash[..] {
+    if credential_matches(privacy_data, verify_type, &verify_data) {
         // Generate a challenge token (64 bytes) for successful verification
         // The challenge must be 64 bytes to match what modifyPasswordByChallenge expects
         let challenge = generate_random_bytes(64);
 
         info!(?system_type, ?verify_type, "Password verified");
 
-        // Reset retry count on success
-        privacy_data.retry_count = 5;
-
-        // Generate new handler to be used after successful modify
-        let new_handler = generate_random_bytes(8);
-
-        // Store challenge and new handler in RuntimeState (not persisted)
-        runtime.set_pending(system_type, challenge.clone(), new_handler.clone());
-
-        storage.save()?;
+        privacy_data.reset_retries();
+        privacy_data.authorization = Some(PendingVerification {
+            challenge: challenge.clone(),
+            issued_at: now.clone(),
+        });
 
         Ok(ResponseBuilder::standard(request.method_type())
             .add_param(Parameter::new(MethodParamType::PmsChallengeT, &challenge)?)
-            .add_param(Parameter::new(MethodParamType::PmsHandlerT, &new_handler)?)
             .build())
     } else {
-        // Decrement retry count
-        privacy_data.retry_count = (privacy_data.retry_count - 1).max(0);
-
-        warn!(
-            ?system_type,
-            retries_left = privacy_data.retry_count,
-            "Password mismatch"
-        );
-
-        // Lock account if no retries left
-        if privacy_data.retry_count == 0 {
-            privacy_data.set_lock(30);
-            warn!(?system_type, lock_time = 30, "Account locked");
-        }
-
-        let retries_left = privacy_data.retry_count;
-        storage.save()?;
-
+        let retries_left = privacy_data.record_failure(verify_type, &now);
         Err(CryptoengError::VerificationFailed {
             system_type,
             retries_left,
@@ -433,6 +417,25 @@ fn handle_pms_get_info(
     }
 
     Ok(builder.build())
+}
+
+fn credential_matches(data: &crate::storage::PrivacyData, kind: InfoType, provided: &[u8]) -> bool {
+    if provided.len() != 32 {
+        return false;
+    }
+    match kind {
+        InfoType::Password if data.password_hash.len() == 32 && data.handler.len() == 8 => {
+            let mut hasher = Sha256::new();
+            hasher.update(&data.password_hash);
+            hasher.update(&data.handler);
+            bool::from(provided.ct_eq(hasher.finalize().as_slice()))
+        }
+        InfoType::SecurityQuestion => {
+            data.security_answer_hash.len() == 32
+                && bool::from(provided.ct_eq(&data.security_answer_hash))
+        }
+        _ => false,
+    }
 }
 
 fn require_privacy_system(system: crate::SystemType) -> Result<()> {
