@@ -4,7 +4,13 @@ use aes_gcm::{
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{
+    collections::HashMap,
+    fs::{self, File, OpenOptions},
+    io::{self, Write},
+    os::unix::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
+};
 use tracing::{info, warn};
 
 use crate::{
@@ -160,6 +166,28 @@ fn generate_and_save_key(path: &PathBuf) -> std::result::Result<Key<Aes256Gcm>, 
     Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
 }
 
+fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| io::Error::other("storage path has no parent"))?;
+    let temporary_path = directory.join(format!(".storage-{:032x}.tmp", rand::random::<u128>()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary_path)?;
+    let result = (|| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&temporary_path, path)?;
+        File::open(directory)?.sync_all()
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    result
+}
+
 pub fn encrypt_data(
     key: &Key<Aes256Gcm>,
     plaintext: &[u8],
@@ -284,7 +312,7 @@ impl Storage {
         let encrypted = encrypt_data(key, json.as_bytes())?;
 
         let file_path = dir.join("storage.dat");
-        fs::write(&file_path, encrypted).map_err(StorageError::Write)?;
+        atomic_write(&file_path, &encrypted).map_err(StorageError::Write)?;
 
         Ok(())
     }
