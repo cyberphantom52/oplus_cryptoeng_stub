@@ -104,6 +104,9 @@ pub enum CryptoengError {
 /// Storage-specific errors.
 #[derive(Debug, Error)]
 pub enum StorageError {
+    #[error("Keystore2 storage operation failed: {0}")]
+    Keystore(#[source] Box<dyn std::error::Error + Send + Sync>),
+
     /// Failed to create storage directory.
     #[error("failed to create storage directory: {0}")]
     CreateDir(std::io::Error),
@@ -127,6 +130,12 @@ pub enum StorageError {
     /// Cryptographic operation failed (encrypt/decrypt).
     #[error("crypto error: {0}")]
     Crypto(String),
+}
+
+impl From<crate::keystore::KeyMintError> for StorageError {
+    fn from(error: crate::keystore::KeyMintError) -> Self {
+        Self::Keystore(Box::new(error))
+    }
 }
 
 impl<T> From<PoisonError<T>> for CryptoengError {
