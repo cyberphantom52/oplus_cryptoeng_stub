@@ -54,7 +54,7 @@ pub(crate) struct Issuer {
 
 impl Issuer {
     pub(crate) fn load(kind: IssuerKind) -> Result<Self, CertificateError> {
-        let directory = open_directory()?;
+        let directory = open_directory(CREDENTIAL_DIR)?;
         let (key_name, cert_name) = match kind {
             IssuerKind::User => ("udevice-key.pem", "udevice-cert.pem"),
             IssuerKind::Group => ("gdevice-key.pem", "gdevice-cert.pem"),
@@ -151,9 +151,9 @@ fn trusted_owner(uid: u32) -> bool {
     uid == 0 || uid == rustix::process::geteuid().as_raw()
 }
 
-fn open_directory() -> Result<File, CertificateError> {
+fn open_directory(path: &str) -> Result<File, CertificateError> {
     let directory: File = open(
-        CREDENTIAL_DIR,
+        path,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )
@@ -167,7 +167,12 @@ fn open_directory() -> Result<File, CertificateError> {
 }
 
 pub(super) fn read_metadata() -> Result<Zeroizing<String>, CertificateError> {
-    read_credential(&open_directory()?, "metadata.json", false, 4096)
+    read_credential(
+        &open_directory(crate::storage::STORAGE_DIR)?,
+        "metadata.json",
+        false,
+        4096,
+    )
 }
 
 fn read_credential(
