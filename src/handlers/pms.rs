@@ -15,11 +15,6 @@ register_handler!(MethodType::CeCmdPmsVerify, handle_pms_verify);
 register_handler!(MethodType::CeCmdPmsModify, handle_pms_modify);
 register_handler!(MethodType::CeCmdPmsDelete, handle_pms_delete);
 register_handler!(MethodType::CeCmdPmsGetInfo, handle_pms_get_info);
-register_handler!(
-    MethodType::CeCmdPmsRequestEncryptData,
-    handle_pms_request_encrypt_data
-);
-register_handler!(MethodType::CeCmdPmsResetAllData, handle_pms_reset_all_data);
 
 fn handle_pms_enroll(
     request: &dyn CryptoengRequest,
@@ -378,41 +373,4 @@ fn handle_pms_get_info(
     }
 
     Ok(builder.build())
-}
-
-fn handle_pms_request_encrypt_data(
-    request: &dyn CryptoengRequest,
-    storage: &mut Storage,
-    _runtime: &mut RuntimeState,
-) -> Result<Vec<u8>> {
-    let plaintext = request.get_param(MethodParamType::PmsInfoBufferT)?;
-    let plaintext_bytes = plaintext.value().as_bytes();
-
-    // Encrypt using AES-256-GCM with the storage key
-    let encrypted = storage.encrypt(&plaintext_bytes)?;
-
-    Ok(ResponseBuilder::standard(request.method_type())
-        .add_param(Parameter::new(MethodParamType::PmsEncBufferT, &encrypted)?)
-        .build())
-}
-
-fn handle_pms_reset_all_data(
-    request: &dyn CryptoengRequest,
-    storage: &mut Storage,
-    _runtime: &mut RuntimeState,
-) -> Result<Vec<u8>> {
-    let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
-        Value::SystemType(ty) => *ty,
-        _ => {
-            return Err(CryptoengError::ParseError(
-                "Invalid system type parameter".to_string(),
-            ));
-        }
-    };
-
-    storage.reset_privacy_data(system_type);
-    storage.save()?;
-
-    info!(?system_type, "All data reset");
-    Ok(ResponseBuilder::standard(request.method_type()).build())
 }

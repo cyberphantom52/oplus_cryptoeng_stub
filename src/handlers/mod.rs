@@ -6,7 +6,6 @@ use crate::request::CryptoengRequest;
 use crate::storage::{RuntimeState, Storage};
 use crate::types::method::MethodType;
 
-mod native;
 mod pms;
 
 /// Handler function type - unified for all request types via trait object
