@@ -249,28 +249,29 @@ pub struct PendingVerification {
     pub issued_at: BootTimestamp,
 }
 
-impl PendingVerification {
-    pub fn is_expired(&self, now: &BootTimestamp, lifetime_ms: u64) -> bool {
-        now.elapsed_since(&self.issued_at)
-            .is_none_or(|elapsed| elapsed >= lifetime_ms)
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct LegacyPendingVerification {
-    pub challenge: Vec<u8>,
-    pub pending_handler: Vec<u8>,
-}
-
-/// Runtime state that is NOT persisted to disk
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RuntimeState {
     boot_id: Option<String>,
-
-    pub pending: HashMap<SystemType, LegacyPendingVerification>,
 }
 
 impl RuntimeState {
+    pub fn new() -> Self {
+        let boot_id = fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| {
+                value.len() == 36
+                    && value.bytes().enumerate().all(|(index, byte)| {
+                        if matches!(index, 8 | 13 | 18 | 23) {
+                            byte == b'-'
+                        } else {
+                            byte.is_ascii_hexdigit()
+                        }
+                    })
+            });
+        Self { boot_id }
+    }
+
     pub fn now(&self) -> Result<BootTimestamp> {
         let boot_id = self
             .boot_id
@@ -291,51 +292,12 @@ impl RuntimeState {
             milliseconds,
         })
     }
+}
 
-    pub fn new() -> Self {
-        let boot_id = fs::read_to_string("/proc/sys/kernel/random/boot_id")
-            .ok()
-            .map(|value| value.trim().to_owned())
-            .filter(|value| {
-                value.len() == 36
-                    && value.bytes().enumerate().all(|(index, byte)| {
-                        if matches!(index, 8 | 13 | 18 | 23) {
-                            byte == b'-'
-                        } else {
-                            byte.is_ascii_hexdigit()
-                        }
-                    })
-            });
-        Self {
-            boot_id,
-            pending: HashMap::new(),
-        }
-    }
-
-    /// Store a pending verification for the given system type
-    pub fn set_pending(
-        &mut self,
-        system_type: SystemType,
-        challenge: Vec<u8>,
-        pending_handler: Vec<u8>,
-    ) {
-        self.pending.insert(
-            system_type,
-            LegacyPendingVerification {
-                challenge,
-                pending_handler,
-            },
-        );
-    }
-
-    /// Get pending verification for the given system type
-    pub fn get_pending(&self, system_type: SystemType) -> Option<&LegacyPendingVerification> {
-        self.pending.get(&system_type)
-    }
-
-    /// Take and remove pending verification for the given system type
-    pub fn take_pending(&mut self, system_type: SystemType) -> Option<LegacyPendingVerification> {
-        self.pending.remove(&system_type)
+impl PendingVerification {
+    pub fn is_expired(&self, now: &BootTimestamp, lifetime_ms: u64) -> bool {
+        now.elapsed_since(&self.issued_at)
+            .is_none_or(|elapsed| elapsed >= lifetime_ms)
     }
 }
 

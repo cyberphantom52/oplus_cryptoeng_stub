@@ -8,7 +8,7 @@ use crate::error::{CryptoengError, Result};
 use crate::register_handler;
 use crate::request::CryptoengRequest;
 use crate::response::ResponseBuilder;
-use crate::storage::{PendingVerification, RuntimeState, Storage};
+use crate::storage::{BootTimestamp, PendingVerification, RuntimeState, Storage};
 use crate::types::method::MethodType;
 use crate::types::parameter::{InfoType, MethodParamType, Parameter, Value};
 use crate::utils::generate_random_bytes;
@@ -44,7 +44,6 @@ fn enroll(
     };
     require_privacy_system(system_type)?;
 
-    // Get password type (required for enrollment)
     let password_type = match request.get_param(MethodParamType::PmsPwdTypeT)?.value() {
         Value::PasswordQuality(q) => *q,
         _ => {
@@ -133,7 +132,6 @@ fn enroll(
         }
     }
 
-    // Generate a handler token (must be exactly 8 bytes for password verification)
     privacy_data.handler = generate_random_bytes(8);
     privacy_data.enrolled = true;
     privacy_data.reset_retries();
@@ -194,7 +192,6 @@ fn verify(
     }
     let privacy_data = storage.get_privacy_data_mut(system_type);
 
-    // Check if enrolled
     if !privacy_data.enrolled {
         warn!(?system_type, "Not enrolled");
         return Err(CryptoengError::NotEnrolled(system_type));
@@ -237,6 +234,16 @@ fn handle_pms_modify(
     storage: &mut Storage,
     runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
+    let response = modify(request, storage, runtime)?;
+    storage.save()?;
+    Ok(response)
+}
+
+fn modify(
+    request: &dyn CryptoengRequest,
+    storage: &mut Storage,
+    runtime: &mut RuntimeState,
+) -> Result<Vec<u8>> {
     let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
         Value::SystemType(ty) => *ty,
         _ => {
@@ -245,94 +252,109 @@ fn handle_pms_modify(
             ));
         }
     };
+
     require_privacy_system(system_type)?;
-
-    // Get the challenge provided in the modify request (optional for some flows)
     let challenge = request
-        .get_param(MethodParamType::PmsChallengeT)
-        .map(|p| p.value().as_bytes());
-
+        .get_param(MethodParamType::PmsChallengeT)?
+        .value()
+        .as_bytes();
+    if challenge.len() != crate::CHALLENGE_LENGTH {
+        return Err(CryptoengError::ParseError(
+            "invalid challenge length".into(),
+        ));
+    }
+    let password_type = match request.get_param(MethodParamType::PmsPwdTypeT)?.value() {
+        Value::PasswordQuality(quality) if *quality != crate::PasswordQuality::Unspecified => {
+            *quality
+        }
+        _ => {
+            return Err(CryptoengError::ParseError(
+                "invalid password quality".into(),
+            ));
+        }
+    };
     let info_type = match request.get_param(MethodParamType::PmsInfoTypeT)?.value() {
         Value::InfoType(ty) => *ty,
         _ => {
             return Err(CryptoengError::ParseError(
-                "Invalid info type parameter".to_string(),
+                "invalid modification type".into(),
             ));
         }
     };
-
-    // Validate challenge if one was provided and we have a pending one
-    let pending = runtime.get_pending(system_type);
-    if let Ok(challenge) = &challenge {
-        if let Some(pending) = pending {
-            if *challenge != pending.challenge {
-                warn!(?system_type, "Challenge mismatch");
-                return Err(CryptoengError::ChallengeMismatch(system_type));
-            }
-        }
+    if info_type == InfoType::Unspecified {
+        return Err(CryptoengError::ParseError(
+            "invalid modification type".into(),
+        ));
     }
-
-    let privacy_data = storage.get_privacy_data_mut(system_type);
-
-    // Update password type if provided
-    if let Ok(pwd_type) = request.get_param(MethodParamType::PmsPwdTypeT)
-        && let Value::PasswordQuality(pwd_type) = pwd_type.value()
-    {
-        privacy_data.password_type = *pwd_type;
+    if !matches!(
+        info_type,
+        InfoType::Password | InfoType::SecurityQuestion | InfoType::Email
+    ) {
+        return Err(CryptoengError::UnsupportedOperation);
     }
-
-    // Handle different info types
-    match info_type {
-        InfoType::Password => {
-            let pwd_info = request.get_param(MethodParamType::PmsInfoBufferT)?;
-            privacy_data.password_hash = pwd_info.value().as_bytes().to_vec();
-            info!(
-                ?system_type,
-                password_type = ?privacy_data.password_type,
-                "Password updated"
-            );
-        }
-        InfoType::SecurityQuestion => {
-            tracing::error!("Storing security answer not implemented")
-        }
-        InfoType::Email => {
-            if let Ok(email) = request.get_param(MethodParamType::PmsInfoBufferT) {
-                privacy_data.email =
-                    String::from_utf8_lossy(&*email.value().as_bytes()).to_string();
-                info!(?system_type, "Email updated");
-            }
-        }
+    let information = request
+        .get_param(MethodParamType::PmsInfoBufferT)?
+        .value()
+        .as_bytes();
+    let pending = storage
+        .get_privacy_data(system_type)
+        .and_then(|data| data.authorization.as_ref())
+        .ok_or(CryptoengError::ChallengeMismatch(system_type))?;
+    validate_challenge(&challenge, pending, system_type, &runtime.now()?, 300_000)?;
+    let email = // Handle different info types
+match info_type {
+        InfoType::Password | InfoType::SecurityQuestion if information.len() == 32 => None,
+        InfoType::Email if information.len() <= 64 => Some(
+            std::str::from_utf8(&information)
+                .map_err(|_| CryptoengError::ParseError("invalid email encoding".into()))?
+                .to_owned(),
+        ),
         _ => {
-            warn!(?system_type, info_type = ?info_type, "Unsupported info type for modify");
-            return Err(CryptoengError::ParseError(format!(
-                "Unsupported info type for modify: {:?}",
-                info_type
-            )));
+            return Err(CryptoengError::ParseError(
+                "unsupported modification information".into(),
+            ));
         }
-    }
-
-    // Take the pending verification from runtime state and update handler
-    let new_handler = if let Some(pending) = runtime.take_pending(system_type) {
-        privacy_data.handler = pending.pending_handler.clone();
-        pending.pending_handler
-    } else {
-        // Generate a new handler if no pending one exists
-        let handler = generate_random_bytes(8);
-        privacy_data.handler = handler.clone();
-        handler
     };
-
-    storage.save()?;
-
-    Ok(ResponseBuilder::standard(request.method_type())
-        .add_param(Parameter::new(MethodParamType::PmsHandlerT, &new_handler)?)
-        .build())
+    let privacy_data = storage.get_privacy_data_mut(system_type);
+    if !privacy_data.enrolled {
+        return Err(CryptoengError::NotEnrolled(system_type));
+    }
+    if info_type == InfoType::Password {
+        privacy_data.password_type = password_type;
+    }
+    if let Some(email) = email {
+        privacy_data.email = email;
+    } else if info_type == InfoType::SecurityQuestion {
+        privacy_data.security_answer_hash = information.into_owned();
+    } else {
+        privacy_data.password_hash = information.into_owned();
+    }
+    privacy_data.reset_retries();
+    let mut response = ResponseBuilder::standard(request.method_type());
+    if info_type == InfoType::Password {
+        privacy_data.handler = generate_random_bytes(8);
+        response = response.add_param(Parameter::new(
+            MethodParamType::PmsHandlerT,
+            &privacy_data.handler,
+        )?);
+    }
+    Ok(response.build())
 }
 
 fn handle_pms_delete(
     request: &dyn CryptoengRequest,
     storage: &mut Storage,
-    _runtime: &mut RuntimeState,
+    runtime: &mut RuntimeState,
+) -> Result<Vec<u8>> {
+    let response = delete(request, storage, runtime)?;
+    storage.save()?;
+    Ok(response)
+}
+
+fn delete(
+    request: &dyn CryptoengRequest,
+    storage: &mut Storage,
+    runtime: &mut RuntimeState,
 ) -> Result<Vec<u8>> {
     let system_type = match request.get_param(MethodParamType::PmsTypeT)?.value() {
         Value::SystemType(ty) => *ty,
@@ -343,8 +365,21 @@ fn handle_pms_delete(
         }
     };
     require_privacy_system(system_type)?;
+    let challenge = request
+        .get_param(MethodParamType::PmsChallengeT)?
+        .value()
+        .as_bytes();
+    if challenge.len() != crate::CHALLENGE_LENGTH {
+        return Err(CryptoengError::ParseError(
+            "invalid challenge length".into(),
+        ));
+    }
+    let pending = storage
+        .get_privacy_data(system_type)
+        .and_then(|data| data.authorization.as_ref())
+        .ok_or(CryptoengError::ChallengeMismatch(system_type))?;
+    validate_challenge(&challenge, pending, system_type, &runtime.now()?, 60_000)?;
     storage.reset_privacy_data(system_type);
-    storage.save()?;
 
     info!(?system_type, "Privacy data deleted");
     Ok(ResponseBuilder::standard(request.method_type()).build())
@@ -436,6 +471,23 @@ fn credential_matches(data: &crate::storage::PrivacyData, kind: InfoType, provid
         }
         _ => false,
     }
+}
+
+fn validate_challenge(
+    provided: &[u8],
+    pending: &PendingVerification,
+    system_type: crate::SystemType,
+    now: &BootTimestamp,
+    lifetime_ms: u64,
+) -> Result<()> {
+    if provided.len() != crate::CHALLENGE_LENGTH || !bool::from(provided.ct_eq(&pending.challenge))
+    {
+        return Err(CryptoengError::ChallengeMismatch(system_type));
+    }
+    if pending.is_expired(now, lifetime_ms) {
+        return Err(CryptoengError::ChallengeExpired);
+    }
+    Ok(())
 }
 
 fn require_privacy_system(system: crate::SystemType) -> Result<()> {
