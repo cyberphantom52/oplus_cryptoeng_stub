@@ -17,6 +17,7 @@ chrono = { version = "0.4", features = ["serde"] }
 rand = "0.10"
 aes-gcm = "0.10"
 inventory = "0.3"
+rustix = { version = "1.1.4", features = ["time"] }
 tracing-logcat = "0.1.0"
 
 [build-dependencies]

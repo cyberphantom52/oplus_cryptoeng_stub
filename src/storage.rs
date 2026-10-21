@@ -50,6 +50,20 @@ pub struct PrivacyData {
     pub secure_question_lock_until: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootTimestamp {
+    pub boot_id: String,
+    pub milliseconds: u64,
+}
+
+impl BootTimestamp {
+    fn elapsed_since(&self, earlier: &Self) -> Option<u64> {
+        (self.boot_id == earlier.boot_id)
+            .then(|| self.milliseconds.checked_sub(earlier.milliseconds))
+            .flatten()
+    }
+}
+
 impl PrivacyData {
     pub fn reset_retries(&mut self) {
         self.retry_count = 5;
@@ -113,13 +127,52 @@ pub struct PendingVerification {
 /// Runtime state that is NOT persisted to disk
 #[derive(Debug, Default)]
 pub struct RuntimeState {
+    boot_id: Option<String>,
+
     /// Pending verifications keyed by system type
     pub pending: HashMap<SystemType, PendingVerification>,
 }
 
 impl RuntimeState {
+    pub fn now(&self) -> Result<BootTimestamp> {
+        let boot_id = self
+            .boot_id
+            .as_ref()
+            .ok_or(crate::CryptoengError::ClockUnavailable)?;
+        let time = rustix::time::clock_gettime_dynamic(rustix::time::DynamicClockId::Boottime)
+            .map_err(|_| crate::CryptoengError::ClockUnavailable)?;
+        let seconds =
+            u64::try_from(time.tv_sec).map_err(|_| crate::CryptoengError::ClockUnavailable)?;
+        let nanoseconds =
+            u64::try_from(time.tv_nsec).map_err(|_| crate::CryptoengError::ClockUnavailable)?;
+        let milliseconds = seconds
+            .checked_mul(1000)
+            .and_then(|value| value.checked_add(nanoseconds / 1_000_000))
+            .ok_or(crate::CryptoengError::ClockUnavailable)?;
+        Ok(BootTimestamp {
+            boot_id: boot_id.clone(),
+            milliseconds,
+        })
+    }
+
     pub fn new() -> Self {
-        Self::default()
+        let boot_id = fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| {
+                value.len() == 36
+                    && value.bytes().enumerate().all(|(index, byte)| {
+                        if matches!(index, 8 | 13 | 18 | 23) {
+                            byte == b'-'
+                        } else {
+                            byte.is_ascii_hexdigit()
+                        }
+                    })
+            });
+        Self {
+            boot_id,
+            pending: HashMap::new(),
+        }
     }
 
     /// Store a pending verification for the given system type
