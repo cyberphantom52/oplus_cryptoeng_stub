@@ -45,6 +45,7 @@ impl CryptoengService {
             return Ok(response);
         }
         let mut storage = self.storage.write()?;
+        storage.initialize_if_needed()?;
         storage.ensure_available()?;
         let mut runtime = self.runtime.write()?;
         handlers::dispatch(request, &mut storage, &mut runtime)
