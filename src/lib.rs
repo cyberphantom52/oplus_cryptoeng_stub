@@ -56,7 +56,7 @@ impl Default for CryptoengService {
 impl Interface for CryptoengService {}
 
 impl ICryptoeng for CryptoengService {
-    fn cryptoeng_invoke_command(&self, request: &[u8]) -> rsbinder::status::Result<Vec<u8>> {
+    fn cryptoeng_invoke_command(&self, request: &[u8]) -> rsbinder::BinderResult<Vec<u8>> {
         let response = match self.handle_request(request) {
             Ok(response) => response,
             Err(e) => {

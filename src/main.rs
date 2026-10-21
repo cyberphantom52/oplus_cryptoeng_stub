@@ -23,11 +23,11 @@ fn init_logging() {
         .init();
 }
 
-fn main() -> rsbinder::Result<()> {
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     init_logging();
 
     // Initialize the process state
-    ProcessState::init_default();
+    ProcessState::init_default()?;
 
     // Start the thread pool
     ProcessState::start_thread_pool();
@@ -38,5 +38,6 @@ fn main() -> rsbinder::Result<()> {
 
     info!(descriptor = DESCRIPTOR, "Cryptoeng service started");
 
-    ProcessState::join_thread_pool()
+    ProcessState::join_thread_pool()?;
+    Ok(())
 }
