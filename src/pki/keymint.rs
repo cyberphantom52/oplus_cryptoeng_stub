@@ -1,6 +1,5 @@
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
-use rsbinder::{ExceptionCode, Strong};
-use thiserror::Error;
+
 use x509_cert::{
     Certificate,
     der::{self, Decode, Encode},
@@ -15,34 +14,13 @@ use crate::android::{
         KeyParameter::KeyParameter, KeyParameterValue::KeyParameterValue, KeyPurpose::KeyPurpose,
         SecurityLevel::SecurityLevel, Tag::Tag,
     },
-    system::keystore2::{
-        Domain::Domain, IKeystoreService::IKeystoreService, KeyDescriptor::KeyDescriptor,
-        KeyMetadata::KeyMetadata, ResponseCode::ResponseCode,
-    },
+    system::keystore2::{Domain::Domain, KeyDescriptor::KeyDescriptor, KeyMetadata::KeyMetadata},
 };
 
 use super::credentials::IssuerKind;
 
-const KEYSTORE_SERVICE: &str = "android.system.keystore2.IKeystoreService/default";
-const SERVICE_UID: u32 = 1000;
-
-#[derive(Debug, Error)]
-pub(crate) enum KeyMintError {
-    #[error("Keystore2 transport failed: {0}")]
-    Transport(#[from] rsbinder::StatusCode),
-    #[error("Keystore2 operation failed: {0}")]
-    Binder(#[from] rsbinder::Status),
-    #[error("Keystore2 service is unavailable")]
-    Unavailable,
-    #[error("issuer keys must be accessed as system UID 1000")]
-    WrongUid,
-    #[error("issuer is not a hardware-generated, unauthenticated P-256 SHA-256 signing key")]
-    InvalidMetadata,
-    #[error("KeyMint returned an invalid signature")]
-    InvalidSignature,
-    #[error("issuer certificate encoding is invalid")]
-    Encoding,
-}
+pub(crate) use crate::keystore::KeyMintError;
+use crate::keystore::{connect, key_not_found, parameter};
 
 pub(crate) struct KeyMintSigner {
     descriptor: KeyDescriptor,
@@ -185,13 +163,6 @@ impl KeyMintSigner {
     }
 }
 
-fn connect() -> Result<Strong<dyn IKeystoreService>, KeyMintError> {
-    if rustix::process::geteuid().as_raw() != SERVICE_UID {
-        return Err(KeyMintError::WrongUid);
-    }
-    rsbinder::hub::try_get_interface(KEYSTORE_SERVICE)?.ok_or(KeyMintError::Unavailable)
-}
-
 fn alias_descriptor(kind: IssuerKind) -> KeyDescriptor {
     KeyDescriptor {
         domain: Domain::APP,
@@ -226,10 +197,6 @@ fn validate_subject(certificate: &Certificate, kind: IssuerKind) -> Result<(), K
     Ok(())
 }
 
-fn parameter(tag: Tag, value: KeyParameterValue) -> KeyParameter {
-    KeyParameter { tag, value }
-}
-
 fn generation_parameters(kind: IssuerKind) -> Result<[KeyParameter; 9], KeyMintError> {
     let subject: Name = match kind {
         IssuerKind::User => "CN=uDevice",
@@ -260,11 +227,6 @@ fn generation_parameters(kind: IssuerKind) -> Result<[KeyParameter; 9], KeyMintE
             KeyParameterValue::DateTime(2_524_607_999_000),
         ),
     ])
-}
-
-fn key_not_found(error: &rsbinder::Status) -> bool {
-    error.exception_code() == ExceptionCode::ServiceSpecific
-        && error.service_specific_error() == ResponseCode::KEY_NOT_FOUND.0
 }
 
 fn validate_authorizations(metadata: &KeyMetadata) -> Result<(), KeyMintError> {

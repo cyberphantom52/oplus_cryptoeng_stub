@@ -1,5 +1,6 @@
 mod error;
 mod handlers;
+mod keystore;
 
 mod pki;
 mod request;
