@@ -6,8 +6,8 @@ use x509_cert::{
     SubjectPublicKeyInfo, TbsCertificate,
     builder::{Builder, CertificateBuilder, profile::BuilderProfile},
     der::{
-        self, Decode, Encode, EncodePem,
-        asn1::{BitString, OctetString, Uint},
+        self, Decode, Encode, EncodePem, Tag,
+        asn1::{Any, BitString, OctetString, Uint},
         pem::LineEnding,
     },
     ext::Extension,
@@ -79,15 +79,14 @@ impl Issuer {
         })
     }
 
-    pub(crate) fn issue(
+    pub(super) fn issue_parsed(
         &self,
         app_public_pem: &str,
+        public_key: SubjectPublicKeyInfo,
         subject: &Name,
-        not_before: Time,
-        not_after: Time,
+        validity: [Any; 2],
         extension_cbor: &[u8],
     ) -> Result<(String, String), CertificateError> {
-        let public_key = parse_public_key(app_public_pem)?;
         let issuer_public_der = self
             .key
             .public_der()
@@ -97,23 +96,48 @@ impl Issuer {
         let serial = donor_serial(app_public_pem).map_err(|_| CertificateError::Encoding)?;
         let extensions = donor_extensions(&public_key, &issuer_public_key, extension_cbor)
             .map_err(|_| CertificateError::Encoding)?;
-        let profile = CertificateProfile {
-            subject: subject.clone(),
-            issuer: self.certificate.tbs_certificate().subject().clone(),
-            extensions,
+        let encode = || -> der::Result<Vec<u8>> {
+            let signature_algorithm = self
+                .key
+                .signature_algorithm_identifier()
+                .map_err(|_| der::Error::from(der::ErrorKind::Failed))?;
+
+            let tbs = vec![
+                Any::new(
+                    Tag::ContextSpecific {
+                        constructed: true,
+                        number: der::TagNumber(0),
+                    },
+                    vec![2, 1, 2],
+                )?,
+                Any::encode_from(&serial)?,
+                Any::encode_from(&signature_algorithm)?,
+                Any::encode_from(self.certificate.tbs_certificate().subject())?,
+                Any::encode_from(&Vec::from(validity))?,
+                Any::encode_from(subject)?,
+                Any::encode_from(&public_key)?,
+                Any::new(
+                    Tag::ContextSpecific {
+                        constructed: true,
+                        number: der::TagNumber(3),
+                    },
+                    extensions.to_der()?,
+                )?,
+            ];
+            let body = tbs.to_der()?;
+            let signature: CertificateSignature = self
+                .key
+                .try_sign_with_rng(&mut rand::rng(), &body)
+                .map_err(|_| der::Error::from(der::ErrorKind::Failed))?;
+            vec![
+                Any::encode_from(&tbs)?,
+                Any::encode_from(&signature_algorithm)?,
+                Any::encode_from(&signature.to_bitstring()?)?,
+            ]
+            .to_der()
         };
-        let builder = CertificateBuilder::new(
-            profile,
-            serial,
-            Validity::new(not_before, not_after),
-            public_key,
-        )
-        .map_err(|_| CertificateError::Encoding)?;
-        let certificate = builder
-            .build_with_rng::<_, CertificateSignature, _>(&self.key, &mut rand::rng())
-            .map_err(|_| CertificateError::Signing)?;
-        let pem = certificate
-            .to_pem(LineEnding::LF)
+        let certificate = encode().map_err(|_| CertificateError::Signing)?;
+        let pem = der::pem::encode_string("CERTIFICATE", LineEnding::LF, &certificate)
             .map_err(|_| CertificateError::Encoding)?;
         if pem.len() >= 0xc00 {
             return Err(CertificateError::Encoding);

@@ -9,7 +9,7 @@ use std::sync::Mutex;
 
 use credentials::{CertificateError, Issuer, IssuerKind};
 use error::PkiError;
-use metadata::{Metadata, parse_time};
+use metadata::{Metadata, parse_time, parse_validity};
 
 static PROVISIONING_LOCK: Mutex<()> = Mutex::new(());
 
@@ -110,13 +110,18 @@ fn issue(
     kind: IssuerKind,
     issuer: &Issuer,
 ) -> Result<Vec<u8>, PkiError> {
+    let public_key = certificate::parse_public_key(&request.application_public_key)
+        .map_err(certificate_status)?;
     let subject = metadata.subject(request, kind)?;
     let (signing_cert, attest_cert) = issuer
-        .issue(
+        .issue_parsed(
             &request.application_public_key,
+            public_key,
             &subject,
-            parse_time(&request.not_before)?,
-            parse_time(&request.not_after)?,
+            [
+                parse_validity(&request.not_before)?,
+                parse_validity(&request.not_after)?,
+            ],
             &metadata.extension(request, kind),
         )
         .map_err(certificate_status)?;

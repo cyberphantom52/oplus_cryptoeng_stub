@@ -209,6 +209,21 @@ fn cbor_text(output: &mut Vec<u8>, value: &str) {
     output.extend_from_slice(value.as_bytes());
 }
 
+pub(super) fn parse_validity(value: &str) -> Result<Any, PkiError> {
+    if value.len() != 14 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(PkiError::InvalidValidity);
+    }
+    let date = chrono::NaiveDateTime::parse_from_str(value, "%Y%m%d%H%M%S")
+        .map_err(|_| PkiError::InvalidValidity)?;
+    let year = chrono::Datelike::year(&date);
+    let (tag, body) = if (1950..2050).contains(&year) {
+        (Tag::UtcTime, &value[2..])
+    } else {
+        (Tag::GeneralizedTime, value)
+    };
+    Any::new(tag, format!("{body}Z").into_bytes()).map_err(|_| PkiError::InvalidValidity)
+}
+
 pub(super) fn parse_time(value: &str) -> Result<Time, PkiError> {
     if value.len() != 14 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(PkiError::InvalidValidity);
