@@ -99,6 +99,8 @@ pub enum MethodParamType {
     PmsCurrentPasswordBuffer = 513,
     PmsResultValidity = 514,
     PmsCurrentPasswordType = 515,
+    PkiCalculationT = 600,
+    PkiResponseT = 602,
 
     Unknown = -1,
 }
@@ -145,6 +147,8 @@ impl From<i32> for MethodParamType {
             513 => MethodParamType::PmsCurrentPasswordBuffer,
             514 => MethodParamType::PmsResultValidity,
             515 => MethodParamType::PmsCurrentPasswordType,
+            600 => MethodParamType::PkiCalculationT,
+            602 => MethodParamType::PkiResponseT,
             _ => MethodParamType::Unknown,
         }
     }
