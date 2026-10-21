@@ -31,7 +31,7 @@ const ATTESTATION: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.
 const ECDSA_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
 
 impl Issuer {
-    pub(crate) fn self_signed(
+    pub(super) fn self_signed(
         key: IssuerKey,
         subject: Name,
         not_before: Time,

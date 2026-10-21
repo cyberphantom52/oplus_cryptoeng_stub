@@ -5,10 +5,45 @@ mod keymint;
 mod metadata;
 mod request;
 
-pub use credentials::IssuerKind;
-use credentials::{CertificateError, Issuer};
+use std::sync::Mutex;
+
+use credentials::{CertificateError, Issuer, IssuerKind};
 use error::PkiError;
 use metadata::{Metadata, parse_time};
+
+static PROVISIONING_LOCK: Mutex<()> = Mutex::new(());
+
+fn provision_issuer(kind: IssuerKind) -> Result<Issuer, CertificateError> {
+    if rustix::process::geteuid().as_raw() != 1000 {
+        return Err(keymint::KeyMintError::WrongUid.into());
+    }
+    let _lock = PROVISIONING_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (signer, certificate) = keymint::KeyMintSigner::provision_key(kind)?;
+    if !keymint::KeyMintSigner::is_ready(&certificate) {
+        let subject = match kind {
+            IssuerKind::User => "CN=uDevice",
+            IssuerKind::Group => "CN=gDevice",
+        }
+        .parse()
+        .map_err(|_| CertificateError::Encoding)?;
+        let issuer = Issuer::self_signed(
+            credentials::IssuerKey::KeyMint(signer),
+            subject,
+            parse_time("20200101000000").map_err(|_| CertificateError::Encoding)?,
+            parse_time("20491231235959").map_err(|_| CertificateError::Encoding)?,
+        )?;
+
+        match &issuer.key {
+            credentials::IssuerKey::KeyMint(signer) => {
+                signer.store_certificate(&issuer.certificate)?
+            }
+        }
+    }
+
+    Issuer::load(kind)
+}
 
 use crate::{
     request::CryptoengRequest,
@@ -28,7 +63,7 @@ pub(crate) fn dispatch(command: &dyn CryptoengRequest) -> Option<Vec<u8>> {
             } else {
                 IssuerKind::Group
             };
-            Some(capability_response(Issuer::load(kind)))
+            Some(capability_response(provision_issuer(kind)))
         }
         CeCmdRunPkiBasicAttestation => Some(match attest(command) {
             Ok(response) => response,
@@ -41,7 +76,7 @@ pub(crate) fn dispatch(command: &dyn CryptoengRequest) -> Option<Vec<u8>> {
 }
 
 fn load_issuer(kind: IssuerKind) -> Result<Issuer, PkiError> {
-    Issuer::load(kind).map_err(certificate_status)
+    provision_issuer(kind).map_err(certificate_status)
 }
 
 fn capability_response(issuer: Result<Issuer, CertificateError>) -> Vec<u8> {
